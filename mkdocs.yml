@@ -7,9 +7,18 @@ repo_name: tile-ai/TileOPs
 theme:
   name: material
   palette:
-    scheme: slate
-    primary: teal
-    accent: cyan
+    - scheme: default
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
   logo: assets/logo.png
   favicon: assets/logo.png
   font:
@@ -27,8 +36,27 @@ theme:
 nav:
   - Home: index.md
   - Design:
-    - design/index.md
+    - Overview: design/index.md
+    - Architecture: design/architecture.md
+    - Op Manifest: design/manifest.md
+    - Op Interface Design: design/ops-design.md
+    - Op Interface Reference: design/ops-design-reference.md
+    - Roofline: design/roofline.md
+    - Testing & Benchmarking: design/testing.md
+    - Trust Model: design/trust-model.md
     - Elementwise: design/elementwise.md
+  - Skills:
+    - Overview: skills/index.md
+    - Catalog: skills/catalog.md
+    - align-op: skills/align-op.md
+    - align-family: skills/align-family.md
+    - audit-family: skills/audit-family.md
+    - scaffold-op: skills/scaffold-op.md
+    - implement-op: skills/implement-op.md
+    - test-op: skills/test-op.md
+    - bench-op: skills/bench-op.md
+    - add-manifest: skills/add-manifest.md
+    - fix-manifest: skills/fix-manifest.md
   - API Reference:
     - Elementwise: api/elementwise.md
     - Reduction: api/reduction.md
@@ -50,7 +78,11 @@ markdown_extensions:
       line_spans: __span
       pygments_lang_class: true
   - pymdownx.inlinehilite
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.tabbed:
       alternate_style: true
   - admonition
@@ -60,9 +92,15 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+      toc_depth: 2
+
+hooks:
+  - hooks.py
 
 plugins:
   - search
+  - include-markdown:
+      rewrite_relative_urls: false
   - mkdocstrings:
       on_error: warn
       handlers:
