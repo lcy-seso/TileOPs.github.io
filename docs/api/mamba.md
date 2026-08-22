@@ -1,6 +1,6 @@
-# MHC
+# Mamba Operators
 
-::: tileops.ops.sequence_modeling.mhc
+::: tileops.ops.mamba
     options:
       show_root_heading: false
       members_order: source
