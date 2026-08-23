@@ -32,11 +32,12 @@ listed in the order a backend author meets them:
 None of the seven depends on hardware, every target gets them, and adding a
 third-party backend does not bypass them.
 
-The kernels TileOPs ships (`src/tileops/kernels/`) are the **default
-implementation**: they have no target name and are not in the registry. **The
-default state is no substitution** — with no backend claiming a device, calls run
-the shipped implementation, and only once a backend is installed and claims the
-device does that op's kernel become the backend's. The protocol has no notion of a
+The kernels TileOPs ships ([`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels)) are the **default
+implementation**: they have no target name and are not in the registry.
+
+**The default state is no substitution.** With no backend claiming a device, calls on
+it run the shipped implementation; only once a backend is installed and has claimed
+that device does the op's kernel become the backend's. The protocol has no notion of a
 "default target".
 
 ## Three concepts
@@ -116,17 +117,20 @@ as `(*tensors)`, returning a tensor, a tuple of tensors, or `None` for a pure
 in-place write. What the op layer checks is `callable()`.
 
 **The protocol passes descriptions, not tensors.** That removes the need for a rule
-— "a builder must not read tensor contents or keep a reference to a tensor" — the
-op layer could not enforce. Reading data would make the built kernel depend on
-data, while the memo table keys only on device and shape; keeping a reference would
-have a tensor live as long as the cached kernel. A `TensorSpec` carries neither
-data nor tensor, so neither is expressible.
+the op layer could not enforce — "a builder must not read tensor contents or keep a
+reference to a tensor". Two things are what such a rule would guard against:
+
+- **Reading data** would make the built kernel depend on data, while the memo table
+  keys only on device and shape.
+- **Keeping a reference** would have a tensor live as long as the cached kernel does.
+
+A `TensorSpec` carries neither data nor tensor, so neither is expressible.
 
 ## The builder signature and the manifest
 
 **Writing a kernel needs the manifest, not the TileOPs source.** A builder's
 signature is the op's manifest signature. `RMSNormFwdOp` in
-`src/tileops/manifest/normalization.yaml`:
+[`src/tileops/manifest/normalization.yaml`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/manifest/normalization.yaml):
 
 ```yaml
 signature:
@@ -158,13 +162,19 @@ the constructor; the rest belongs to `__call__`. Decode makes this a hard
 requirement: `seq_len` grows step by step and batch changes with the running set,
 so putting them in the constructor means recompiling every step.
 
-The op layer does not change shapes before handing tensors over. A kernel receives
-the shapes the manifest declares; whatever layout it needs, it arranges itself,
-inside its own call wrapper. Where the code and the manifest both describe
-something, the manifest governs: output dtype, shape rules and parameter types are
-the manifest's, a kernel does not rewrite them, and reports an error where it
-cannot comply. The error has to name which item is unmet — dtype, shape, arch, no
-implementation available, compilation failed — and the value it actually received.
+The op layer does not change shapes before handing tensors over: a kernel receives the
+shapes the manifest declares, and whatever layout it needs it arranges itself, inside
+its own call wrapper.
+
+Where the code and the manifest both describe something, the manifest governs. Output
+dtype, shape rules and parameter types are the manifest's, a kernel does not rewrite
+them, and it reports an error where it cannot comply — an error that has to say two
+things:
+
+- **Which item is unmet** — dtype, shape, arch, no implementation available,
+  compilation failed.
+- **The value it actually received.**
+
 "Unsupported" on its own is not a diagnosis.
 
 ## When a kernel is rebuilt
@@ -325,15 +335,17 @@ that TileOPs is too old.
 2. Change `_detect` to claim the corresponding device type.
 3. Replace `kernels.py` with real kernels — compile on construction, launch on `__call__`.
 4. Pick the first op to take over and write its `build_kernel` against the op's manifest signature.
-5. The four files under `tests/` carry over largely as they are; substitute the op and target names.
+5. The four files under [`tests/`](https://github.com/lcy-seso/tileops-backend-example/tree/main/tests) carry over largely as they are; substitute the op and target names.
 6. Add a `build_kernel` per op from there, until every op the target model uses is covered.
 
 ## Three states after install
 
 Once `detect` claims a class of devices, **every** op on those devices is served by
-that target; a missing one is an error, with no fall back to the implementation
-TileOPs ships. The reason: selecting a target means the device belongs to other
-hardware, where the shipped kernels cannot launch, and falling back would trade a
+that target, a missing one is an error, and there is no fall back to the
+implementation TileOPs ships.
+
+The reason for not falling back: selecting a target means this device belongs to other
+hardware, where the shipped kernels cannot launch at all. Falling back would trade a
 clear "this target does not implement this op" for an incomprehensible launch
 failure.
 
