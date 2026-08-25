@@ -1,9 +1,13 @@
 # 性能指南
 
-性能相关的内容分三类：已经测出来的数字、自己动手定位问题的工具，以及定位之后怎么改。
+分三类：已经测出来的数字、自己动手定位问题的工具，以及定位之后怎么改。
 
-- [性能数据](../benchmarks/index.md) —— 每晚在 H200 上运行的性能测量，逐算子逐 workload 给出 device time，并与同一算子最快的其他实现对比。数字怎么取、比值怎么读，见该栏的「How these numbers are taken」。
-- [核内时间线追踪](trace-timeline.md) —— 在 kernel 体内加标记，运行后得到逐 CTA 的时间线，用于定位空隙、停等以及生产者与消费者的重叠情况。这是 per-kernel profiler 看不到的部分。追踪的 API 见 [Trace](../api/trace.md)。
-- [访存受限 kernel 的调优](memory-bound-kernels.md) —— 在 elementwise 与 reduction 上反复遇到的九种情形，每条给出触发条件、CUDA 层面的原理、反例与正例的代码，以及在 H200 上实测的差距。
+| 文档 | 内容 |
+| --- | --- |
+| [性能数据](../benchmarks/index.md) | 每晚在 H200 上的实测，逐算子逐 workload 与最快的其他实现对比 |
+| [核内时间线追踪](trace-timeline.md) | 在 kernel 体内加标记，读回逐 CTA 的时间线：空隙、停等、生产者与消费者的重叠 |
+| [优化 access pattern](memory-bound-kernels.md) | 五条：访存合并、bank 冲突、整行读进 fragment、窄输出、bool 用 int8 存储 |
+| [超越函数的开销与精度](transcendental.md) | 两条：在 fp32 上做运算、用恒等式减少超越函数的个数 |
+| [TileLang 使用陷阱](tilelang-pitfalls.md) | 两条：宏按提及展开、编译期的代数简化把运算整个消掉 |
 
 一次调用的计算量与访存量由 `op.eval_roofline()` 给出，取自 manifest 的 `roofline` 字段，是读测量结果时对照的上限；模型与字段规范见 [Roofline](../design/roofline.md)。
