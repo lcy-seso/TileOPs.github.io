@@ -67,3 +67,29 @@ ordered = T.bitwise_xor(magnitude, sign) - sign   # 两个零的幅值都是 0�
 实测
 
 不是性能项，是正确性项：`argmax` 在一行交替的 `±0.0` 上从返回第一个 `+0.0` 的下标改为返回 0，与 PyTorch 一致。
+
+## 3. 不要用 x != x 判断 NaN {#nan-check}
+
+`x != x` 是 C 里判断 NaN 的常用写法，浮点语义上也没错 —— NaN 是唯一不等于自身的值。但 TileLang 的简化器按实数代数化简，把它当作恒假消掉，于是这个谓词永远返回 false，**NaN 一个都检不出来，而且不报错**。
+
+实测：一个用 `buf[c] != buf[c]` 写的 `isnan` kernel，输入里放两个 NaN，检出 0 个。改用 `T.isnan` 后检出 2 个。
+
+同一段逻辑交给 nvcc 并不会这样。`(x[i] != x[i]) ? 1 : 0` 用 `nvcc -O3 -arch=sm_90` 编译，两个 NaN 都检出；加上 `--use_fast_math` 仍然检出。所以这不是 CUDA 或编译选项的问题，换 nvcc 的开关绕不开。
+
+这与[第 2 条](#signed-zero)是同一个根因：简化器按实数的代数规则化简，而这些规则在浮点的特例上不成立。凡是依赖 NaN、$\pm 0$、Inf 这类特例的写法，都要先读生成的 CUDA 确认它还在。
+
+反例
+
+```python
+def op_func(x):
+    return x != x          # 被简化器消成恒假，检不出任何 NaN
+```
+
+正例
+
+```python
+def op_func(x):
+    return T.isnan(T.cast(x, "float32"))
+```
+
+TileOPs 里 `IsnanFwdKernel` 用的就是后者。
