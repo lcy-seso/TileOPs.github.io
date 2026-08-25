@@ -59,6 +59,7 @@ nav:
   - Performance Guides:
     - performance-guides/index.md
     - Timeline Trace: performance-guides/trace-timeline.md
+    - Memory-Bound Kernels: performance-guides/memory-bound-kernels.md
   - Design:
     - design/index.md
     - Architecture: design/architecture.md
@@ -164,6 +165,7 @@ plugins:
             Trace: Trace
             Benchmarks: 性能数据
             Performance Guides: 性能指南
+            Memory-Bound Kernels: 访存受限 kernel
             Timeline Trace: 时间线追踪
   - include-markdown:
       rewrite_relative_urls: false
