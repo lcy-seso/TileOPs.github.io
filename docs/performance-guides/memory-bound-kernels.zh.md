@@ -2,7 +2,7 @@
 
 ## 什么是访存受限
 
-在 GPU 上，一个 kernel 跑多快，取决于算力与带宽哪一个先成为瓶颈。TileOPs 用 [macro benchmark](https://github.com/tile-ai/TileOPs/tree/main/benchmarks/hardware) 测算出一个**[校准系数](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)**：硬件 spec 给出的理论峰值乘以它，得到实际可达的有效值，以此作为性能优化的指导标准。我们在H200 上实测出 [fp32 FMA 的算力为 **57.27** TFLOP/s，访存带宽为 **4.07** TB/s](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)；两者相除，得到的就是 roofline 的**拐点**（ridge point）：
+在 GPU 上，一个 kernel 跑多快，取决于算力与带宽哪一个先成为瓶颈。TileOPs 用 [macro benchmark](https://github.com/tile-ai/TileOPs/tree/main/benchmarks/hardware) 测算出一个**[校准系数](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)**：硬件 spec 给出的理论峰值乘以它得到实际可达的有效值，以此作为性能优化的指导标准。我们在H200 上实测出 [fp32 FMA 的算力为 **57.27** TFLOP/s，访存带宽为 **4.07** TB/s](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)；两者相除，得到的就是 roofline 的**拐点**（ridge point）：
 
 <figure class="roofline" markdown="1">
 
@@ -56,25 +56,25 @@
 
 </figure>
 
-[Elementwise](https://tile-ai.github.io/TileOPs.github.io/api/elementwise/) 与 [Reduction](https://tile-ai.github.io/TileOPs.github.io/api/reduction/) 是典型的访存受限 kernel。在调优这一类kernel的性能时，我们反复遇到过几类常见问题，这里把他们整理成条目，每条给出：什么情况下触发、原因分成、反例与正例的代码，以及在 H200 上实测的差距。
+[Elementwise](https://tile-ai.github.io/TileOPs.github.io/api/elementwise/) 与 [Reduction](https://tile-ai.github.io/TileOPs.github.io/api/reduction/) 是典型的访存受限 kernel。在调优这一类kernel的性能时，我们反复遇到过几类常见问题，这里把他们整理成条目，每条给出：什么情况下触发、原因分成、反例与正例的代码。在进入下文之前，我们先给出两条会被反复用到的硬件事实：
 
-在进入下文之前，我们先给出两条会被反复用到的硬件事实：
+- **一次 global memory 读取的数据访问单位是 32 字节的 sector。** sector 同时也是缓存内部搬运数据的单位：
 
-- **global memory 的访存有两级粒度**，真正搬运数据的是其中较小的那个：
-
-    | 粒度 | 大小 | 用途 |
+    | 名称 | 大小 | 是什么 |
     | --- | --- | --- |
-    | cache line | 128 字节 | L1/L2 里做标记、查找、替换的单位（通行的建模值） |
-    | **sector** | **32 字节** | 真正搬运数据的单位 —— L2 与 L1 之间、以及与 DRAM 之间的一次传输 |
+    | cache line | 128 字节 | L1 与 L2 的 cache line，也是 tag（查找时用的键）的单位 |
+    | **sector** | **32 字节** | 一条 cache line 由 4 个 sector 组成，L1 与 L2 之间按 sector 传输 |
 
-    一条 cache line 由 4 个 sector 组成。查找按 line，搬运按 sector：命中哪个 sector 就只搬那个，不必把整条 line 拉过来。关键后果是**取 1 个字节和取满 32 个字节的代价相同** —— 请求落在某个 sector 里，那 32 字节就整体被搬一次。于是一条访存指令的好坏，看的是 `真正用到的字节 / (覆盖的 sector 数 × 32)`。
+    缓存查找时以 cache line 为单位，搬运数据时以 sector 为单位：某个 sector 未命中，L1 就只向 L2 请求这一个 sector，不必把整条 cache line 都拉过来。由此得到的结论是**取 1 个字节和取满 32 个字节的代价相同**。于是一条访存指令的好坏，看的是 `真正用到的字节 / (覆盖的 sector 数 × 32)`。
 
 
-- **shared memory 由 32 条 bank 构成，每条宽 4 字节，可以同时访问。** 一个地址落在哪条 bank 上，由 `(字节地址 / 4) mod 32` 决定。同一条指令里，多个线程访问同一条 bank 上**不同**的 4 字节 word 时会被串行处理；**读取同一个** word 时走广播，不计冲突。（写入同一地址则是其中一个胜出，哪一个未定义。）
+- **shared memory 由 32 条 bank 构成，每条 bank 宽 4 字节，32 条可以同时被访问。** 一个地址落在哪条 bank 上，由 `(字节地址 / 4) mod 32` 决定。多个线程并发访问 shared memory 时，只要它们落在不同的 bank 上，这些请求就能被并行地服务完。
+
+    落在同一条 bank 上则不然。同一个 warp 内若有多个线程访问一条 bank 上的**不同** word，硬件会把这次请求拆成若干次无冲突的请求依次完成，拆分的次数就是冲突的路数。例外是**读取同一个** word：任意两个线程只要落在同一个 word 内（哪怕取的是其中不同的字节），彼此就不冲突，这个 word 会被广播给所有请求它的线程；分布在不同 bank 上的多个广播还会合并为一次 multicast。这两种情形都不产生冲突。（若多个线程写入同一地址，只有一个写入生效，是哪一个未定义。）
 
 ## 1. 一个线程要消费多个元素时，把搬运和消费分开 {#rule-1}
 
-**应该注意**：一个线程要连续吃掉 V 个元素时，最直觉的写法是让它自己去 global memory 取那一段 —— `x[base + tx * V + c]`，第 `tx` 号线程拿第 `tx` 段，段内用 `c` 走位。这种切分叫 blocked，它的问题是每条指令覆盖的字节远多于用到的。解法是先用 `T.copy` 或 `T.Parallel` 把这一段搬进 shared memory 或 fragment，再从片上按消费需要的顺序读。**把 global memory 的读法改成 striped（相邻线程取相邻元素、各自跳着走）不是解法** —— 见下面的实测。
+一个线程要连续消费 $V$ 个元素时，最直觉的写法是让它自己去 global memory 取那一段 —— `x[base + tx * V + c]`，第 `tx` 号线程拿第 `tx` 段，段内用 `c` 取偏移。这种切分叫 blocked，它的问题是每条指令覆盖的字节远多于用到的。解法是先用 `T.copy` 或 `T.Parallel` 把这一段搬进 shared memory 或 fragment，再从缓存上按消费需要的顺序读。**把 global memory 的读法改成 striped（相邻线程取相邻元素、各自跳着走）不是解法** —— 见下面的实测。
 
 blocked 写法里，固定 `c` 时相邻线程的地址相差 V 个元素。V = 8 的 fp16 就是 16 字节，一个 warp 的 32 个线程覆盖 512 字节即 16 个 sector；每个 sector 里落进相邻两个线程的元素，用到 4 字节，效率 4/32 = 12.5%。
 
