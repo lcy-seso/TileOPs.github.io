@@ -1373,9 +1373,10 @@ html[lang="zh"] .md-nav__title {
 }
 
 .md-typeset figure.roofline figcaption {
+  max-width: none;
   margin-top: 0.5rem;
   color: var(--md-default-fg-color--light);
-  font-size: 0.78rem;
+  font-size: 0.7rem;
   line-height: 1.7;
   text-align: left;
 }
@@ -1455,10 +1456,37 @@ html[lang="zh"] .md-nav__title {
   font-size: 12px;
 }
 
+/* Material caps figcaption at 24rem and centres it; these captions carry the
+   figure's argument and want the full column. */
 .md-typeset figure.access-patterns figcaption {
+  max-width: none;
   margin-top: 0.5rem;
   color: var(--md-default-fg-color--light);
-  font-size: 0.78rem;
+  font-size: 0.7rem;
   line-height: 1.7;
   text-align: left;
+}
+
+/* Winning cell in a measurement table. Bold alone does not survive a page of
+   tables; the rose is the same one the benchmark pages use for a verdict. */
+.md-typeset .win {
+  color: var(--tf-rose);
+  font-weight: 700;
+}
+
+/* Which thread owns which element, by alternating tone: same thread, same
+   tone. blocked banks four cells per tone, striped alternates every cell, and
+   the difference is visible without reading a label. Kept as a neutral ink wash
+   so it does not compete with the teal (fetched sector) and violet (element the
+   instruction reads) that carry the argument. */
+.md-typeset .tf-access .ap-cell--t1 {
+  fill: color-mix(in srgb, var(--tf-ink), transparent 78%);
+}
+
+/* t0…t7 above each thread's span. The alternating tone shows where the
+   boundaries fall; only the labels say how many threads there are. */
+.md-typeset .tf-access .ap-owner {
+  fill: var(--md-default-fg-color--light);
+  font-family: var(--tf-mono);
+  font-size: 10px;
 }
