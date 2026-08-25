@@ -1,4 +1,4 @@
-# 访存受限 kernel 的调优
+# 优化 access pattern
 
 ## 什么是访存受限
 
@@ -72,7 +72,7 @@
 
     落在同一条 bank 上则不然。同一个 warp 内若有多个线程访问一条 bank 上的**不同** word，硬件会把这次请求拆成若干次无冲突的请求依次完成，拆分的次数就是冲突的路数。例外是**读取同一个** word：任意两个线程只要落在同一个 word 内（哪怕取的是其中不同的字节），彼此就不冲突，这个 word 会被广播给所有请求它的线程；分布在不同 bank 上的多个广播还会合并为一次 multicast。这两种情形都不产生冲突。（若多个线程写入同一地址，只有一个写入生效，是哪一个未定义。）
 
-## 1. global memory 的访存合并 {#rule-1}
+## 1. 让 global memory 的访存合并 {#coalescing}
 
 一个线程要消费 $V$ 个元素时，「哪个线程读哪些元素」这个映射有四种写法。
 
@@ -442,7 +442,7 @@ H200，SM 时钟锁在 1830 MHz。每行 4096 个 bf16 元素，行数取 65536�
 
 **blocked 只在 $V$ 很小时可以接受。** $V = 8$ 时它是 3.02，与另外三种同速 —— 冗余被 L1 吸收了。$V$ 再大就不成立：$V = 64$ 时降到 0.48。
 
-**staged 在这两组实测里从未胜出。** 顺序受约束时它比向量化慢 1.7 到 3.9 倍，$V$ 越大差距越大 —— 一次 shared memory 中转、两次同步，以及消费阶段的 bank 冲突（见[第 2 条](#rule-2)）都要计入。它的用处在别处：整行需要被 block 内所有线程共享，而不是各线程只读自己那一段时。
+**staged 在这两组实测里从未胜出。** 顺序受约束时它比向量化慢 1.7 到 3.9 倍，$V$ 越大差距越大 —— 一次 shared memory 中转、两次同步，以及消费阶段的 bank 冲突（见[第 2 条](#bank-conflict)）都要计入。它的用处在别处：整行需要被 block 内所有线程共享，而不是各线程只读自己那一段时。
 
 ### 代码
 
@@ -473,9 +473,9 @@ for c in T.serial(V):
     acc[0] = acc[0] * T.cast(x[row, c * threads + tx], "float32")
 ```
 
-## 2. shared memory 的 bank 冲突 {#rule-2}
+## 2. 消除 shared memory 的 bank 冲突 {#bank-conflict}
 
-[第 1 条](#rule-1)的 staged 路线把整行搬进 shared memory，每个线程再读自己那一段。消费时固定段内偏移，一个 warp 的 32 个线程相隔一整段 —— 这个 stride 决定它们落在几条 bank 上。
+[第 1 条](#coalescing)的 staged 路线把整行搬进 shared memory，每个线程再读自己那一段。消费时固定段内偏移，一个 warp 的 32 个线程相隔一整段 —— 这个 stride 决定它们落在几条 bank 上。
 
 设一段有 `chunk` 个元素、元素 `E` 字节，则 stride 折成 4 字节 word 是 `chunk * E / 4` 个。落到多少条不同的 bank 上由它与 32 的最大公约数决定：
 
@@ -525,114 +525,71 @@ pad = 2 if elem_bytes == 2 else 1
 staged = T.alloc_shared((threads, chunk + pad), dtype)
 ```
 
-## 3. 整行装得进寄存器时，直接读进 fragment {#rule-3}
+## 3. 用 T.copy 把整行读进 fragment {#registers}
 
-**应该注意**：一行能被一个 block 放进寄存器时，一次 `T.copy` 读进 fragment 比经 shared 中转少一趟往返；元素的列下标就是遍历 fragment 的循环变量，不需要另外维护。
+一个线程要看过整行（或整行的一段）时，有两种写法：逐个元素从 global memory 取，或者一次 `T.copy` 把整行搬进 fragment 再遍历。
 
-fragment 在寄存器里。`T.copy` 的线程映射由布局推导给出，本身就是 striped 的，所以这条与[第 1 条](#rule-1)一致。
+fragment 落在寄存器里，`T.copy` 的线程映射由布局推导给出、是合并的 —— 也就是[第 1 条](#coalescing)里的向量化路线，只是粒度从「每线程一段」放大到「整行」。附带的好处是列下标就是遍历 fragment 的循环变量，不必再从线程号和迭代次数拼出来。
 
-装得下与否由每线程 255 个寄存器决定：每线程持有的 32 位量等于 `元素数 × 元素字节 / 4`。行宽固定时这个量只随线程数变 —— 4096 列 fp16 在 256 线程下是 8 个寄存器，在 64 线程下是 32 个。**所以线程数要随行宽定，而不是取一个固定值。**
+### 实测
 
-超过 255，编译器把多出来的量放进 local memory。local memory 物理上就在 global memory 里，延迟与带宽随之；虽然默认经 L1 与 L2 缓存，一次溢出仍然把寄存器访问换成了访存。
+H200，SM 时钟锁在 1830 MHz，fp16，输入 512 MB（大于 60 MiB 的 L2）。kernel 求每行的最大值：反例逐元素走 global memory，正例先 `T.copy` 进 fragment。行宽固定、只变 block 的线程数，因此每线程持有的元素数是唯一变量：
 
-反例
+| 行宽 | 线程数 | 每线程元素 | 每线程寄存器 | 逐元素 | `T.copy` 进 fragment |
+| --- | --- | --- | --- | --- | --- |
+| 4096 | 512 | 8 | 4 | 3.11 | 3.17 |
+| 4096 | 256 | 16 | 8 | 3.38 | **4.24** |
+| 4096 | 128 | 32 | 16 | 3.70 | **4.38** |
+| 4096 | 64 | 64 | 32 | 3.97 | **4.35** |
+| 4096 | 32 | 128 | 64 | 3.83 | **4.33** |
+| 16384 | 128 | 128 | 64 | 3.69 | **4.44** |
+| 16384 | 64 | 256 | 128 | 3.74 | **4.39** |
+
+fragment 一侧在 8 到 128 个寄存器之间基本平坦，`4.24` 到 `4.44` TB/s；只在 512 线程那一行退回与逐元素同速。
+
+### 判断寄存器是否够用
+
+每线程 255 个 32 位寄存器是架构上限，超过之后编译器把放不下的部分挪到 local memory。但**这件事本身不一定有代价**：
+
+| 每线程元素 | 每线程寄存器 | 遍历 fragment 1 遍 | 遍历 4 遍 |
+| --- | --- | --- | --- |
+| 16 | 8 | 4.04 | 3.78 |
+| 64 | 32 | 4.20 | 4.01 |
+| 256 | 128 | 4.25 | 3.73 |
+| 512 | **256** | 4.05 | **2.62** |
+
+每线程 512 个 fp16 元素折合 256 个寄存器，已经越过上限，生成的 CUDA 里确实是一个 `[512]` 的数组；只遍历一遍时带宽仍有 4.05 TB/s，遍历四遍才掉到 2.62。原因是 local memory 的访问本身是合并的、且经 L1 与 L2 缓存，遍历一遍时它的延迟被 DRAM 侧掩掉；反复遍历才把它暴露成瓶颈。
+
+### 取舍
+
+**优先 `T.copy` 进 fragment。** 除了 512 线程那一档，它在所有配置上都比逐元素快 0.5 到 1.0 TB/s。
+
+**不必为了「装得进寄存器」去压线程数。** 上面 8 到 128 个寄存器的区间里带宽是平的，甚至越过 255 上限也只在 fragment 被反复遍历时才掉。线程数取 64 到 256 之间都可以，512 明显偏大。
+
+**fragment 要被反复遍历时，才需要核对寄存器数量。** 判断依据是「每线程持有的 32 位量 = 元素数 × 元素字节 / 4」，越过 255 且要多次遍历时，改成分块处理或退回 shared memory（[第 2 条](#bank-conflict)）。
+
+### 代码
+
+反例，逐元素走 global memory：
 
 ```python
-# 每线程一次一个元素地走这一行，列下标自己算
 for it in T.serial(iterations):
     index = it * threads + tx
     if index < N:
         update(best, key_of(x[row, index]), index)
 ```
 
-正例
+正例，一次 `T.copy` 进 fragment，列下标就是循环变量：
 
 ```python
 row_frag = T.alloc_fragment((1, N), dtype)
 T.copy(x[row : row + 1, :], row_frag)
 
-# 列下标就是循环变量
 for _, column in T.Parallel(1, N):
     update(best, key_of(row_frag[0, column]), column)
 ```
 
-实测
-
-H200，2048×4096 fp16 的按行 `argmax`：逐元素走 global memory 2.02 TB/s，读进 fragment 2.21 TB/s。行越宽差距越大 —— 256×32768 上是 1.65 对 2.12 TB/s。
-
-## 4. 存储 dtype 窄于 fp32 时，把超越函数和除法提到 fp32 {#rule-4}
-
-**应该注意**：`T.exp`、`T.log`、除法直接作用在 fp16 或 bf16 的值上，既慢又不准。
-
-超越函数不走普通的浮点流水线，而是走 MUFU（special function unit），而 MUFU 只有 fp32 的形式。窄类型的超越函数无论怎么写都要转到 fp32 再转回：写在存储 dtype 上，这对转换落在**每一次运算的两侧**；写在 fp32 上，整个式子只在读入与写出各转一次。
-
-中间量的精度也不同：留在 fp16 意味着每一步都被舍到 11 位有效位。
-
-反例
-
-```python
-@staticmethod
-def op_func(x):
-    return x * T.sigmoid(x)      # x 是存储 dtype，指数就跑在那里
-```
-
-正例
-
-```python
-@staticmethod
-def op_func(x):
-    one = T.cast(1.0, "float32")
-    wide = T.cast(x, "float32")
-    return wide / (one + T.exp(-wide))   # 顺带把乘法折进除法，少一次乘法
-```
-
-实测
-
-H200，256M 个元素的 `silu`：fp16 3.54 → 4.05 TB/s，bf16 3.74 → 4.04 TB/s；对 fp32 参考值的最大误差同时减半。
-
-## 5. 一个式子里出现多个超越函数时，先找恒等式 {#rule-5}
-
-**应该注意**：超越函数走 MUFU，吞吐是 fp32 FMA 的 1/8；精确版 `expf`、`logf` 在 MUFU 之外还要做区间归约 —— 读生成的代码可以数出来是十几条指令的序列，三个叠起来量级上相当于上百个 FMA。这两个数字是数出来的估计，不是手册给的吞吐。
-
-代数等价的形式里，要选没有相消误差的那个。以 mish 为例，设 `e = exp(x)`：
-
-- `tanh(log(1 + e)) = (s² − 1) / (s² + 1)`，其中 `s = 1 + e` —— `e` 小于 1 的 eps 时 `s² − 1` 完全相消。
-- `tanh(log(1 + e)) = (e² + 2e) / (e² + 2e + 2)` —— 没有减法。
-
-溢出边界靠分支处理，不靠更高精度：`x` 大时 `e²` 会越过 fp32 的 3.4e38，而同一区间里那个比值到 fp32 每一位都是 1，取分支返回 `x` 同时解决精度与溢出。
-
-反例
-
-```python
-@staticmethod
-def op_func(x):
-    one = T.cast(1.0, "float32")
-    return x * T.tanh(T.log(one + T.exp(x)))   # exp、log、tanh 三个
-```
-
-正例
-
-```python
-_MISH_SATURATION = 20.0
-
-@staticmethod
-def op_func(x):
-    two = T.cast(2.0, "float32")
-    wide = T.cast(x, "float32")
-    e = T.exp(wide)
-    saturated = e * e + two * e
-    return T.if_then_else(
-        wide > T.cast(_MISH_SATURATION, "float32"),
-        wide,
-        wide * saturated / (saturated + two),
-    )
-```
-
-实测
-
-H200，26.2M 个 fp16 元素的 `mish`：1.85 → 3.36 TB/s。同时更准 —— 原式在极负 `x` 上 `log(1 + e)` 把小量舍成零，fp32 全域最大相对误差 1.0，新形式 3.3e-07。
-
-## 6. 输出比输入窄时，每线程多取一次输入 {#rule-6}
+## 4. 输出比输入窄时，每线程多取一次输入 {#narrow-output}
 
 **应该注意**：每线程元素数按输入宽度凑一次 128 位访问时，更窄的输出得到的存储指令覆盖不了同样的字节数。
 
@@ -658,7 +615,7 @@ if stored_bytes < elem_bytes:
 
 H200，16M 个 fp32 元素的 `isnan`（bool 输出）：3.34 → 3.63 TB/s；256M 时 4.10 → 4.36 TB/s。两个输入的比较类算子在同一区间内是平的，因为它们的线程本来就多持有一份输入。
 
-## 7. kernel 产生 bool 时，用 int8 存储 {#rule-7}
+## 5. kernel 产生 bool 时，用 int8 存储 {#bool-storage}
 
 **应该注意**：向量化的 bool 在 CUDA codegen 里没有对应类型，会把每线程元素数卡在 4。
 
@@ -698,69 +655,3 @@ return result.view(torch.bool)
 实测
 
 H200，16M 个元素，对同一算子最快的其他实现的比值：`isnan` 从 0.738 到 0.924，`logical_not` 从 0.811 到 0.921。改法抬升的是整个谓词族，不只这两个。
-
-## 8. 传给 T.macro 的表达式先绑到局部变量 {#rule-8}
-
-**应该注意**：`T.macro` 是文本替换，不是函数调用 —— 参数在宏体里出现几次就展开几次。
-
-一个在宏体里被提到四次的参数，如果传进去的是一个调用，那次计算就在生成的 CUDA 里出现四份。这不是编译器一定会消除的公共子表达式：`T.reinterpret` 这类位级操作 nvcc 不一定认作可复用。
-
-判断方法是读生成的代码：`kernel.get_kernel_source()`。
-
-反例
-
-```python
-@T.macro
-def update(keys, indices, slot, candidate_key, candidate_index):
-    if candidate_key > keys[slot] or (
-        candidate_key == keys[slot] and candidate_index < indices[slot]
-    ):
-        keys[slot] = candidate_key
-        indices[slot] = T.cast(candidate_index, "int32")
-
-# candidate_key 在宏体里出现四次，于是 key_of 被算四遍
-update(keys, indices, slot, key_of(x[row, index]), index)
-```
-
-正例
-
-```python
-candidate = T.alloc_local((1,), "int32")
-
-candidate[0] = key_of(x[row, index])
-update(keys, indices, slot, candidate[0], index)
-```
-
-实测
-
-argreduce 的排序键在生成的 CUDA 里由六份减为一份。
-
-## 9. 需要让 -0.0 与 +0.0 落到同一个值时，不要依赖 x + 0.0 {#rule-9}
-
-**应该注意**：IEEE 754 规定 `-0.0 + 0.0 = +0.0`，写法本身没错，但这次加法到不了运行时 —— TileLang 生成的 CUDA 里它已经不见了。
-
-折叠发生在 TileLang（TVM 的算术简化器）这一层：它把「加零」当作恒等变换消除，而这个恒等式对 `-0.0` 恰好不成立。实测同一段代码交给 `nvcc -O3 -arch=sm_90` 时 SASS 里 `FADD` 仍在，所以这不是 nvcc 的行为，指望换编译选项绕开是没用的。**依赖 IEEE 特例做规范化，就要选不会被当作恒等式的运算** —— 掩符号位是位操作，没有代数恒等式可套。
-
-按位比较的排序键尤其要注意：`-0.0` 与 `+0.0` 作为浮点数相等，而位模式不同。两者不同键，`argmax` 在一行 `±0.0` 上就会返回错的下标。
-
-反例
-
-```python
-shifted = wide + T.cast(0.0, "float32")      # 简化器直接消掉，-0.0 仍是 -0.0
-bits = T.reinterpret(shifted, "int32")
-```
-
-正例
-
-```python
-bits = T.reinterpret(wide, "int32")
-sign = bits >> 31
-magnitude = T.bitwise_and(bits, T.int32(0x7FFFFFFF))
-ordered = T.bitwise_xor(magnitude, sign) - sign   # 两个零的幅值都是 0，取负仍是 0
-```
-
-这个变换对所有非 NaN 的浮点数给出与浮点比较一致的整数序，但它**不是完整的 IEEE `totalOrder`** —— NaN 要单独分出一支处理（`argreduce.py` 里就是 `T.if_then_else(oriented != oriented, ...)` 那一句）。
-
-实测
-
-不是性能项，是正确性项：`argmax` 在一行交替的 `±0.0` 上从返回第一个 `+0.0` 的下标改为返回 0，与 PyTorch 一致。
