@@ -406,28 +406,59 @@
 | **striped** | 交错的单个元素，`x[row, c * threads + tx]` | 两两相邻 | 100% |
 | **staged** | 连续的一段，`staged[tx * V + c]` | 搬运阶段两两相邻，由 `T.Parallel` 给出 | 100% |
 
-只有 blocked 两个要求都不满足：它的 sector 利用率取 bf16、每 block 256 线程、$V = 16$ 时是 2/32 = 6.25% —— 相邻线程相隔 32 字节，一个 warp 铺开 1024 字节即 32 个 sector，每个只用到 2 字节。其余三种都完全合并。
+只有 blocked 两个要求都不满足。它的 sector 利用率是 $1/V$ —— 一个 warp 的一条指令用到 32 个线程各 2 字节共 64 字节，却铺开在 $64V$ 字节上 —— 取 bf16、$V = 16$ 时是 6.25%。其余三种都完全合并。
 
-**首选向量化的 blocked。** 把每线程那一段用 `T.vectorized` 读进寄存器，一条指令覆盖 16 字节，32 个线程的段首尾相接铺满 512 字节 —— 既满足计算的要求，也满足硬件的要求，而且不需要 shared memory、不需要同步。
+**但 sector 利用率衡量的是单条指令，不能直接当作带宽的预测量。** blocked 的 `c` 循环会把同一批 sector 反复走一遍：第一次迭代把它们取进 L1，后续迭代若仍命中，冗余就不会传到 DRAM。这个重用窗口是每 warp $64V$ 字节，$V$ 越大越留不住。下面的实测里，$V = 8$ 的 blocked 与完全合并的写法基本同速，而 $V$ 增大后逐级掉下去。
 
-**当线程的寄存器容纳不下这 $V$ 个元素时，改用 staged。** 向量化是把这一段放进线程私有的寄存器，而每线程最多 255 个 32 位寄存器（见[第 3 条](#rule-3)）；$V$ 偏大或 dtype 偏宽时就会超出，编译器把放不下的部分挪到 local memory，一次访存于是变成两次。staged 改从 shared memory 供给同一段数据，把「合并地搬」和「按顺序地读」拆成两个阶段；代价是多一次中转、两次同步，以及 bank 冲突这个新问题 —— 见[第 2 条](#rule-2)。
+### 实测
 
-**消费顺序不受约束时，striped 同样可用。** 它只需改动索引表达式，不引入寄存器压力，也不需要同步。代价是每个线程要 issue $V$ 条标量读，而向量化的 blocked 只 issue 一条；实测 3.35 对 3.85 TB/s，差距来自指令数。
+H200，SM 时钟锁在 1830 MHz。每行 4096 个 bf16 元素，行数取 65536，使输入为 512 MB —— **必须大于 L2 才测得到 DRAM 带宽**，这块卡的 L2 是 60 MiB（`cudaDeviceProp.l2CacheSize` = 62914560 字节）。$V$ 由 block 的线程数决定，行宽与输入大小始终不变，因此只有每线程的寄存器需求在变。每个数字三次跑一致到 ±0.5%。
 
-反例
+按行 `prod`，与顺序无关，只读 512 MB：
+
+| 线程数 | $V$ | blocked | blocked + 向量化 | striped | staged |
+| --- | --- | --- | --- | --- | --- |
+| 512 | 8 | 3.02 | **3.19** | 3.07 | 3.05 |
+| 256 | 16 | 1.83 | 3.84 | 3.35 | **3.85** |
+| 128 | 32 | 0.94 | **3.99** | 3.36 | 3.82 |
+| 64 | 64 | 0.48 | 3.32 | **3.49** | 2.82 |
+| 32 | 128 | 0.47 | 3.10 | **3.43** | 2.83 |
+
+按行的串行前缀积，顺序受约束，读加写 1 GB。striped 在这里不可用：
+
+| 线程数 | $V$ | blocked | blocked + 向量化 | staged |
+| --- | --- | --- | --- | --- |
+| 512 | 8 | 0.92 | **4.17** | 2.47 |
+| 256 | 16 | 0.42 | **3.85** | 1.63 |
+| 128 | 32 | 0.34 | **2.76** | 0.89 |
+| 64 | 64 | 0.26 | **1.80** | 0.46 |
+| 32 | 128 | 0.27 | **1.60** | 0.46 |
+
+### 取舍
+
+**默认用向量化的 blocked。** 它在上面两组、五个 $V$ 上都是最快或与最快持平。`T.vectorized` 把每线程那一段读成 16 字节的向量访问，于是每线程仍持有连续一段，而 32 个线程的段首尾相接铺满 512 字节，两个要求同时满足，且不需要 shared memory 与同步。
+
+**顺序不受约束且 $V$ 偏大时，striped 略优。** $V = 64$ 与 128 上它是 3.49 与 3.43，向量化是 3.32 与 3.10。向量化在大 $V$ 上要占掉每线程 $V/2$ 个寄存器（$V = 128$ 时 64 个），占用率随之下降；striped 每线程只用一个累加器。
+
+**blocked 只在 $V$ 很小时可以接受。** $V = 8$ 时它是 3.02，与另外三种同速 —— 冗余被 L1 吸收了。$V$ 再大就不成立：$V = 64$ 时降到 0.48。
+
+**staged 在这两组实测里从未胜出。** 顺序受约束时它比向量化慢 1.7 到 3.9 倍，$V$ 越大差距越大 —— 一次 shared memory 中转、两次同步，以及消费阶段的 bank 冲突（见[第 2 条](#rule-2)）都要计入。它的用处在别处：整行需要被 block 内所有线程共享，而不是各线程只读自己那一段时。
+
+### 代码
+
+反例，逐元素的 blocked：
 
 ```python
-# 每个线程直接从 global memory 逐个取自己那一段
 for c in T.serial(V):
     acc[0] = acc[0] * T.cast(x[row, tx * V + c], "float32")
 ```
 
-正例，向量化的 blocked
+正例，向量化的 blocked：
 
 ```python
 buf = T.alloc_local((V,), dtype)
 
-# 一条 16 字节向量读，生成的 CUDA 里是 *(uint4*)(buf) = *(uint4*)(x + ...)
+# 一条 16 字节向量访问，生成的 CUDA 里是 *(uint4*)(buf) = *(uint4*)(x + ...)
 for c in T.vectorized(V):
     buf[c] = x[row, tx * V + c]
 
@@ -435,77 +466,64 @@ for c in T.serial(V):
     acc[0] = acc[0] * T.cast(buf[c], "float32")
 ```
 
-正例，装不下时用 staged
+正例，$V$ 偏大且顺序不受约束时的 striped：
 
 ```python
-staged = T.alloc_shared((N,), dtype)
-
-# 搬运：线程映射由 T.Parallel 给出，是合并的
-for i in T.Parallel(N):
-    staged[i] = x[row, i]
-T.sync_threads()
-
-# 消费：在 shared memory 上，顺序随计算需要
 for c in T.serial(V):
-    run[0] = run[0] * T.cast(staged[tx * V + c], "float32")
+    acc[0] = acc[0] * T.cast(x[row, c * threads + tx], "float32")
 ```
 
-实测
+## 2. shared memory 的 bank 冲突 {#rule-2}
 
-H200（SM 时钟锁在 1830 MHz），65536×4096 bf16，每个 block 256 线程、每线程 $V = 16$ 个元素。
+[第 1 条](#rule-1)的 staged 路线把整行搬进 shared memory，每个线程再读自己那一段。消费时固定段内偏移，一个 warp 的 32 个线程相隔一整段 —— 这个 stride 决定它们落在几条 bank 上。
 
-工作集取 512 MB 是必需的，不是随手取的大小：**H200 的 L2 是 60 MiB（运行时查询 `cudaDeviceProp.l2CacheSize` 得 62914560 字节），若整个输入装得进 L2，测到的就是 L2 带宽而不是 DRAM 带宽。** 同一份 kernel 在 16 MB 输入下会测出 1.96 TB/s，而在同一进程里多分配两份数据把 L2 挤掉之后测出 0.54 TB/s —— 那不是访存模式的差别，是 L2 命中率的差别。下面每个数字三次跑一致到 ±0.5%。
+设一段有 `chunk` 个元素、元素 `E` 字节，则 stride 折成 4 字节 word 是 `chunk * E / 4` 个。落到多少条不同的 bank 上由它与 32 的最大公约数决定：
 
-按行 `prod`，与顺序无关，只读：
+```
+不同的 bank 数 = 32 / gcd(stride_words, 32)
+冲突路数       = gcd(stride_words, 32)
+```
 
-| 访存模式 | sector 利用率 | 带宽 |
-| --- | --- | --- |
-| **blocked** | 6.25% | 1.84 TB/s |
-| **blocked + 向量化** | 100% | **3.85 TB/s** |
-| **striped** | 100% | 3.35 TB/s |
-| **staged** | 100% | **3.85 TB/s** |
+`gcd` 等于 1 时 32 个线程铺在 32 条 bank 上，无冲突；等于 32 时全部挤在同一条 bank 上，32 路串行。fp16、`chunk = 64` 就是后者：stride 是 128 字节即 32 个 word，`gcd(32, 32) = 32`。
 
-按行的串行前缀积，顺序受约束，读加写：
+在 stride 上加 `pad` 个元素即可改变这个公约数。**目标是让 `(chunk + pad) * E / 4` 成为奇数**，此时 `gcd` 为 1，冲突消失。
 
-| 访存模式 | 带宽 |
-| --- | --- |
-| **blocked** | 0.42 TB/s |
-| **blocked + 向量化** | **3.87 TB/s** |
-| **staged** | 1.63 TB/s |
+### 实测
 
-两组数据把收益分解成两部分：**合并贡献主要部分**，1.84 提到 3.35 以上；**指令数贡献其余部分**，striped 的 3.35 与向量化的 3.85 之差即是。顺序受约束时，向量化的 blocked 比 staged 快 2.4 倍，说明 staged 的一次 shared memory 中转与两次同步有实际开销。
+H200，SM 时钟锁在 1830 MHz。fp16，每行 4096 个元素，行数取 65536 使输入为 512 MB（大于 60 MiB 的 L2）。kernel 把整行搬进 `(threads, chunk + pad)` 的 shared 缓冲，逐段做串行前缀积再写回，读加写共 1 GB。括号内是上面公式预测的冲突路数：
 
-## 2. 每线程按固定 stride 读 shared memory 时，给 stride 加 pad {#rule-2}
+| chunk | 线程数 | pad = 0 | pad = 2 | pad = 4 | pad = 8 | pad = 16 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 16 | 256 | 1.63（8 路） | 2.99（1 路） | **3.29**（2 路） | 2.58（4 路） | 0.86（16 路） |
+| 32 | 128 | 0.89（16 路） | 3.32（1 路） | **3.35**（2 路） | 2.57（4 路） | 1.54（8 路） |
+| 64 | 64 | 0.46（32 路） | 3.63（1 路） | **3.70**（2 路） | 2.74（4 路） | 1.62（8 路） |
+| 128 | 32 | 0.46（32 路） | 3.25（1 路） | **3.31**（2 路） | 2.76（4 路） | 1.61（8 路） |
 
-**应该注意**：[第 1 条](#rule-1)的 `staged[tx, j]` 里，每个线程的起始地址相差一整个 chunk。这个 stride 换算成 bank word 后如果是 32 的倍数，整个 warp 落在同一个 bank 上。
+20 个配置里，带宽随预测的路数单调下降 —— 1 路与 2 路在 3.0 以上，4 路降到 2.6 附近，8 路及以上跌到 1.6 以下。公式可以直接用来选 pad，不必逐个试。
 
-bank 编号 = (字节地址 / 4) mod 32。fp16、每线程 chunk 为 64 列时，stride 是 128 字节即 32 个 word，`32 · tx mod 32 = 0` —— 一个 warp 的 32 个线程**全部落在 bank 0，32 路串行**。
+### 取舍
 
-pad 8 个 fp16 之后 stride 是 144 字节即 36 个 word，`gcd(36, 32) = 4`，落在 8 个不同 bank 上，退化到 4 路。
+**按公式选 pad，不要按字节对齐选。** fp16 下 `pad = 2`（4 字节）使 `(chunk + 2) * 2 / 4 = (chunk + 2) / 2` 为奇数，无冲突；`pad = 8`（16 字节）反而落在 4 路，`pad = 16`（32 字节）落在 8 路甚至 16 路。16 字节对齐能保住 shared memory 一侧的向量访问，但代价是引入的冲突远大于收益：`pad = 8` 的 2.57 到 2.76 明显低于 `pad = 2` 的 3.25 到 3.63。
 
-pad 取 16 字节的倍数，每个 chunk 才仍然 16 字节对齐；否则 SASS 里的 `LDS.128` 与 `STS.128` 失去对齐，搬入一侧反而丢掉向量化。16 字节是 PTX 一次向量访问的最大宽度，也要求按 16 字节对齐。
+**pad 之后最优的 chunk 会变。** `pad = 0` 时最优是 `chunk = 16`（1.63），`pad = 4` 时最优是 `chunk = 64`（3.70）。冲突消掉之后，更大的段意味着更少线程争用同一批 bank，最优点因此往大移。改完 pad 要重扫 chunk。
 
-**pad 之后要重扫最优 chunk。** 冲突消掉后，更大的 chunk 意味着更少线程争用同一批 bank，最优点会往大移。
+**这一条只在 staged 路线上出现。** 第 1 条的实测表明，向量化的 blocked 通常更快，那条路线把数据放进寄存器，不经 shared memory，也就没有 bank 冲突可言。只有整行需要被 block 内所有线程共享时才走 staged，届时这一条适用。
 
-反例
+### 代码
+
+反例，stride 恰好是 32 个 word 的倍数：
 
 ```python
 staged = T.alloc_shared((threads, chunk), dtype)   # stride = chunk
 ```
 
-正例
+正例，pad 到 stride 的 word 数为奇数：
 
 ```python
-_PAD_BYTES = 16
-pad = _PAD_BYTES // torch.empty(0, dtype=getattr(torch, dtype)).element_size()
-staged = T.alloc_shared((threads, chunk + pad), dtype)   # stride = chunk + pad
+# fp16：chunk 为偶数时 pad = 2 即可让 (chunk + 2) * 2 / 4 为奇数
+pad = 2 if elem_bytes == 2 else 1
+staged = T.alloc_shared((threads, chunk + pad), dtype)
 ```
-
-实测
-
-H200，2048×4096 fp16 的按行 `cumsum`：chunk = 64 不加 pad 时 1.31 TB/s，加 16 字节 pad 后 3.44 TB/s。同时最优 chunk 从 16 列移到 64 列 —— 这就是上面说的「要重扫」。
-
-`tilelang.layout.make_swizzled_layout` 是另一条路，不需要 pad，但对形状敏感：同一个 kernel 在 chunk = 128 时降到 1.13 TB/s，而 pad 是 3.30。
 
 ## 3. 整行装得进寄存器时，直接读进 fragment {#rule-3}
 
