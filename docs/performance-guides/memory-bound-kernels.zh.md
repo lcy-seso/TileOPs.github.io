@@ -65,57 +65,415 @@
     | cache line | 128 字节 | L1 与 L2 的 cache line，也是 tag（查找时用的键）的单位 |
     | **sector** | **32 字节** | 一条 cache line 由 4 个 sector 组成，L1 与 L2 之间按 sector 传输 |
 
-    缓存查找时以 cache line 为单位，搬运数据时以 sector 为单位：某个 sector 未命中，L1 就只向 L2 请求这一个 sector，不必把整条 cache line 都拉过来。由此得到的结论是**取 1 个字节和取满 32 个字节的代价相同**。于是一条访存指令的好坏，看的是 `真正用到的字节 / (覆盖的 sector 数 × 32)`。
+    缓存查找时以 cache line 为单位，搬运数据时以 sector 为单位：某个 sector 未命中，L1 就只向 L2 请求这一个 sector，不必把整条 cache line 都拉过来。由此得到的结论是**取 1 个字节和取满 32 个字节的代价相同**。于是一条访存指令的好坏由 **sector 利用率**衡量：`真正用到的字节 / (覆盖的 sector 数 × 32)`。
 
 
 - **shared memory 由 32 条 bank 构成，每条 bank 宽 4 字节，32 条可以同时被访问。** 一个地址落在哪条 bank 上，由 `(字节地址 / 4) mod 32` 决定。多个线程并发访问 shared memory 时，只要它们落在不同的 bank 上，这些请求就能被并行地服务完。
 
     落在同一条 bank 上则不然。同一个 warp 内若有多个线程访问一条 bank 上的**不同** word，硬件会把这次请求拆成若干次无冲突的请求依次完成，拆分的次数就是冲突的路数。例外是**读取同一个** word：任意两个线程只要落在同一个 word 内（哪怕取的是其中不同的字节），彼此就不冲突，这个 word 会被广播给所有请求它的线程；分布在不同 bank 上的多个广播还会合并为一次 multicast。这两种情形都不产生冲突。（若多个线程写入同一地址，只有一个写入生效，是哪一个未定义。）
 
-## 1. 一个线程要消费多个元素时，把搬运和消费分开 {#rule-1}
+## 1. global memory 的访存合并 {#rule-1}
 
-一个线程要连续消费 $V$ 个元素时，最直觉的写法是让它自己去 global memory 取那一段 —— `x[base + tx * V + c]`，第 `tx` 号线程拿第 `tx` 段，段内用 `c` 取偏移。这种切分叫 blocked，它的问题是每条指令覆盖的字节远多于用到的。解法是先用 `T.copy` 或 `T.Parallel` 把这一段搬进 shared memory 或 fragment，再从缓存上按消费需要的顺序读。**把 global memory 的读法改成 striped（相邻线程取相邻元素、各自跳着走）不是解法** —— 见下面的实测。
+一个线程要消费 $V$ 个元素时，「哪个线程读哪些元素」这个映射有四种写法。
 
-blocked 写法里，固定 `c` 时相邻线程的地址相差 V 个元素。V = 8 的 fp16 就是 16 字节，一个 warp 的 32 个线程覆盖 512 字节即 16 个 sector；每个 sector 里落进相邻两个线程的元素，用到 4 字节，效率 4/32 = 12.5%。
+<figure class="access-patterns" markdown="1">
 
-但这份浪费不落在 DRAM 上：相邻迭代命中的是同一批 sector，它们仍在 L1 里。代价出在 L1 的 sector 请求数与 LSU 的发射数上。这解释了两件事 —— 实测差距是 10% 左右而不是十几倍，以及**单纯把读法换成 striped 并不会更快**，因为那只是换了一种同样窄的访问。
+<svg class="tf-access" viewBox="0 0 520 330" role="img" aria-label="三种访存模式下，一个 warp 的一条读取指令触及的元素，以及硬件因此取回的 sector。blocked 覆盖 4 个 sector，每个只用到 2 个元素；向量化后的 blocked 与 striped 都完全合并；staged 的搬运阶段与 striped 一样合并，消费阶段在 shared memory 上，不存在 sector。">
+<text class="ap-title" x="0" y="24.0">blocked</text>
+<text class="ap-sub" x="0" y="38.0">tx * V + c</text>
+<rect class="ap-sector ap-sector--fetched" x="136.0" y="14.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="229.0" y="14.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="322.0" y="14.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="415.0" y="14.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-cell" x="136.0" y="14.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="141.5" cy="25.0" r="3.2"/>
+<rect class="ap-cell" x="147.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="158.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="169.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="180.0" y="14.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="185.5" cy="25.0" r="3.2"/>
+<rect class="ap-cell" x="191.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="202.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="213.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="229.0" y="14.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="234.5" cy="25.0" r="3.2"/>
+<rect class="ap-cell" x="240.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="251.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="262.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="273.0" y="14.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="278.5" cy="25.0" r="3.2"/>
+<rect class="ap-cell" x="284.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="295.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="306.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="322.0" y="14.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="327.5" cy="25.0" r="3.2"/>
+<rect class="ap-cell" x="333.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="344.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="355.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="366.0" y="14.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="371.5" cy="25.0" r="3.2"/>
+<rect class="ap-cell" x="377.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="388.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="399.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="415.0" y="14.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="420.5" cy="25.0" r="3.2"/>
+<rect class="ap-cell" x="426.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="437.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="448.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="459.0" y="14.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="464.5" cy="25.0" r="3.2"/>
+<rect class="ap-cell" x="470.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="481.0" y="14.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="492.0" y="14.0" width="11.0" height="22.0"/>
+<text class="ap-note" x="136.0" y="51.0">取回 4 个 sector，每个只用到 2 / 8 个元素</text>
+<text class="ap-title" x="0" y="94.0">blocked + 向量化</text>
+<text class="ap-sub" x="0" y="108.0">T.vectorized(V)</text>
+<rect class="ap-sector ap-sector--fetched" x="136.0" y="84.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="229.0" y="84.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="322.0" y="84.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="415.0" y="84.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-cell" x="136.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="141.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="147.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="152.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="158.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="163.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="169.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="174.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="180.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="185.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="191.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="196.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="202.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="207.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="213.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="218.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="229.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="234.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="240.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="245.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="251.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="256.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="262.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="267.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="273.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="278.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="284.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="289.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="295.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="300.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="306.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="311.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="322.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="327.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="333.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="338.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="344.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="349.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="355.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="360.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="366.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="371.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="377.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="382.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="388.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="393.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="399.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="404.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="415.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="420.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="426.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="431.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="437.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="442.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="448.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="453.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="459.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="464.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="470.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="475.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="481.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="486.5" cy="95.0" r="3.2"/>
+<rect class="ap-cell" x="492.0" y="84.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="497.5" cy="95.0" r="3.2"/>
+<text class="ap-note" x="136.0" y="121.0">一条 16 字节向量读，取回 4 个 sector，全部用满</text>
+<text class="ap-title" x="0" y="164.0">striped</text>
+<text class="ap-sub" x="0" y="178.0">c * threads + tx</text>
+<rect class="ap-sector ap-sector--fetched" x="136.0" y="154.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector" x="229.0" y="154.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector" x="322.0" y="154.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector" x="415.0" y="154.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-cell" x="136.0" y="154.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="141.5" cy="165.0" r="3.2"/>
+<rect class="ap-cell" x="147.0" y="154.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="152.5" cy="165.0" r="3.2"/>
+<rect class="ap-cell" x="158.0" y="154.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="163.5" cy="165.0" r="3.2"/>
+<rect class="ap-cell" x="169.0" y="154.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="174.5" cy="165.0" r="3.2"/>
+<rect class="ap-cell" x="180.0" y="154.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="185.5" cy="165.0" r="3.2"/>
+<rect class="ap-cell" x="191.0" y="154.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="196.5" cy="165.0" r="3.2"/>
+<rect class="ap-cell" x="202.0" y="154.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="207.5" cy="165.0" r="3.2"/>
+<rect class="ap-cell" x="213.0" y="154.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="218.5" cy="165.0" r="3.2"/>
+<rect class="ap-cell" x="229.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="240.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="251.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="262.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="273.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="284.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="295.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="306.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="322.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="333.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="344.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="355.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="366.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="377.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="388.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="399.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="415.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="426.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="437.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="448.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="459.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="470.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="481.0" y="154.0" width="11.0" height="22.0"/>
+<rect class="ap-cell" x="492.0" y="154.0" width="11.0" height="22.0"/>
+<text class="ap-note" x="136.0" y="191.0">取回 1 个 sector，8 / 8 个元素全部用到</text>
+<text class="ap-title" x="0" y="234.0">staged</text>
+<text class="ap-sub" x="0" y="248.0">T.Parallel 整行搬运</text>
+<rect class="ap-sector ap-sector--fetched" x="136.0" y="224.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="229.0" y="224.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="322.0" y="224.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--fetched" x="415.0" y="224.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-cell" x="136.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="141.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="147.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="152.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="158.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="163.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="169.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="174.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="180.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="185.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="191.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="196.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="202.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="207.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="213.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="218.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="229.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="234.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="240.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="245.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="251.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="256.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="262.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="267.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="273.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="278.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="284.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="289.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="295.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="300.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="306.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="311.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="322.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="327.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="333.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="338.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="344.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="349.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="355.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="360.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="366.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="371.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="377.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="382.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="388.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="393.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="399.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="404.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="415.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="420.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="426.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="431.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="437.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="442.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="448.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="453.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="459.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="464.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="470.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="475.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="481.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="486.5" cy="235.0" r="3.2"/>
+<rect class="ap-cell" x="492.0" y="224.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="497.5" cy="235.0" r="3.2"/>
+<text class="ap-note" x="136.0" y="261.0">取回 4 个 sector，全部用满</text>
+<text class="ap-sub" x="0" y="296.0">staged[tx * V + c]</text>
+<rect class="ap-sector ap-sector--onchip" x="136.0" y="272.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--onchip" x="229.0" y="272.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--onchip" x="322.0" y="272.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-sector ap-sector--onchip" x="415.0" y="272.0" width="88.0" height="22.0" rx="2"/>
+<rect class="ap-cell" x="136.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="141.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="147.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="152.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="158.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="163.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="169.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="174.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="180.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="185.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="191.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="196.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="202.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="207.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="213.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="218.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="229.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="234.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="240.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="245.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="251.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="256.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="262.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="267.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="273.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="278.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="284.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="289.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="295.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="300.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="306.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="311.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="322.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="327.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="333.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="338.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="344.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="349.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="355.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="360.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="366.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="371.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="377.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="382.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="388.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="393.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="399.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="404.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="415.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="420.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="426.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="431.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="437.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="442.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="448.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="453.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="459.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="464.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="470.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="475.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="481.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="486.5" cy="283.0" r="3.2"/>
+<rect class="ap-cell" x="492.0" y="272.0" width="11.0" height="22.0"/>
+<circle class="ap-dot" cx="497.5" cy="283.0" r="3.2"/>
+<text class="ap-note" x="136.0" y="309.0">在 shared memory 上消费，不存在 sector</text>
+<text class="ap-scale" x="0" y="326.0">示意图：fp32、8 个线程、V = 4，一个 sector 装 8 个元素。正文实测用 bf16、256 线程、V = 16，形状相同。</text>
+</svg>
 
-真正省下的是指令：搬运交给 `T.copy` 或 `T.Parallel`，它们的线程映射由布局推导给出，一次搬 16 字节；消费再从片上按任意顺序读，片上没有 sector 的概念。串行前缀（scan）这类要求一个线程持有连续一段的计算，也只有这样才能同时满足合并与顺序两个要求。
+<figcaption>一个 warp 的一条读取指令：紫点是它真正读到的元素，青色底是硬件因此必须取回的 sector。blocked 摊开在 4 个 sector 上而每个只取用其中两个元素；向量化之后同样的地址由一条 16 字节访问一次读完，4 个 sector 全部用满；striped 把 32 个请求收进 1 个 sector；staged 的搬运阶段与 striped 同样合并，消费阶段落在 shared memory 上，那里不按 sector 组织，虚线框表示这一层不再有合并问题。</figcaption>
+
+</figure>
+
+选哪一种，要同时看两个互相拉扯的要求：
+
+- **计算的要求**：有些计算必须让一个线程持有连续的一段，例如串行前缀，它的第 `c` 个结果依赖自己的第 `c-1` 个。
+- **硬件的要求**：同一条指令里 32 个线程的地址越挨在一起，覆盖的 sector 越少，sector 利用率越高。
+
+下表中间两列分别对应这两个要求：
+
+| 访存模式 | 每个线程持有 | 一条指令里 32 个线程的地址 | sector 利用率 |
+| --- | --- | --- | --- |
+| **blocked** | 连续的一段，`x[row, tx * V + c]` | 两两相隔 $V$ 个元素 | 6.25% |
+| **blocked + 向量化** | 连续的一段，同上 | 一条指令读满自己那一段，32 段首尾相接 | 100% |
+| **striped** | 交错的单个元素，`x[row, c * threads + tx]` | 两两相邻 | 100% |
+| **staged** | 连续的一段，`staged[tx * V + c]` | 搬运阶段两两相邻，由 `T.Parallel` 给出 | 100% |
+
+只有 blocked 两个要求都不满足：它的 sector 利用率取 bf16、每 block 256 线程、$V = 16$ 时是 2/32 = 6.25% —— 相邻线程相隔 32 字节，一个 warp 铺开 1024 字节即 32 个 sector，每个只用到 2 字节。其余三种都完全合并。
+
+**首选向量化的 blocked。** 把每线程那一段用 `T.vectorized` 读进寄存器，一条指令覆盖 16 字节，32 个线程的段首尾相接铺满 512 字节 —— 既满足计算的要求，也满足硬件的要求，而且不需要 shared memory、不需要同步。
+
+**当线程的寄存器容纳不下这 $V$ 个元素时，改用 staged。** 向量化是把这一段放进线程私有的寄存器，而每线程最多 255 个 32 位寄存器（见[第 3 条](#rule-3)）；$V$ 偏大或 dtype 偏宽时就会超出，编译器把放不下的部分挪到 local memory，一次访存于是变成两次。staged 改从 shared memory 供给同一段数据，把「合并地搬」和「按顺序地读」拆成两个阶段；代价是多一次中转、两次同步，以及 bank 冲突这个新问题 —— 见[第 2 条](#rule-2)。
+
+**消费顺序不受约束时，striped 同样可用。** 它只需改动索引表达式，不引入寄存器压力，也不需要同步。代价是每个线程要 issue $V$ 条标量读，而向量化的 blocked 只 issue 一条；实测 3.35 对 3.85 TB/s，差距来自指令数。
 
 反例
 
 ```python
-# 每个线程直接从 global memory 取自己那一段连续的 V 个元素
+# 每个线程直接从 global memory 逐个取自己那一段
 for c in T.serial(V):
-    acc[0] = acc[0] * T.cast(x[row, (t * threads + tx) * V + c], "float32")
+    acc[0] = acc[0] * T.cast(x[row, tx * V + c], "float32")
 ```
 
-正例
+正例，向量化的 blocked
 
 ```python
-staged = T.alloc_shared((chunk,), dtype)
+buf = T.alloc_local((V,), dtype)
 
-# 搬运：线程映射由 T.Parallel 给出，一次 16 字节
-for i in T.Parallel(chunk):
-    staged[i] = x[row, t * chunk + i]
+# 一条 16 字节向量读，生成的 CUDA 里是 *(uint4*)(buf) = *(uint4*)(x + ...)
+for c in T.vectorized(V):
+    buf[c] = x[row, tx * V + c]
+
+for c in T.serial(V):
+    acc[0] = acc[0] * T.cast(buf[c], "float32")
+```
+
+正例，装不下时用 staged
+
+```python
+staged = T.alloc_shared((N,), dtype)
+
+# 搬运：线程映射由 T.Parallel 给出，是合并的
+for i in T.Parallel(N):
+    staged[i] = x[row, i]
 T.sync_threads()
 
-# 消费：片上，顺序随计算需要
+# 消费：在 shared memory 上，顺序随计算需要
 for c in T.serial(V):
-    acc[0] = acc[0] * T.cast(staged[tx * V + c], "float32")
+    run[0] = run[0] * T.cast(staged[tx * V + c], "float32")
 ```
 
 实测
 
-H200，2048×4096 bf16 的按行 `prod`，三种写法：
+H200（SM 时钟锁在 1830 MHz），65536×4096 bf16，每个 block 256 线程、每线程 $V = 16$ 个元素。
 
-| 写法 | 带宽 |
+工作集取 512 MB 是必需的，不是随手取的大小：**H200 的 L2 是 60 MiB（运行时查询 `cudaDeviceProp.l2CacheSize` 得 62914560 字节），若整个输入装得进 L2，测到的就是 L2 带宽而不是 DRAM 带宽。** 同一份 kernel 在 16 MB 输入下会测出 1.96 TB/s，而在同一进程里多分配两份数据把 L2 挤掉之后测出 0.54 TB/s —— 那不是访存模式的差别，是 L2 命中率的差别。下面每个数字三次跑一致到 ±0.5%。
+
+按行 `prod`，与顺序无关，只读：
+
+| 访存模式 | sector 利用率 | 带宽 |
+| --- | --- | --- |
+| **blocked** | 6.25% | 1.84 TB/s |
+| **blocked + 向量化** | 100% | **3.85 TB/s** |
+| **striped** | 100% | 3.35 TB/s |
+| **staged** | 100% | **3.85 TB/s** |
+
+按行的串行前缀积，顺序受约束，读加写：
+
+| 访存模式 | 带宽 |
 | --- | --- |
-| blocked，直接读 global memory | 2.15 TB/s |
-| striped，直接读 global memory | 2.03 TB/s |
-| 经 shared 中转 | **2.34 TB/s** |
+| **blocked** | 0.42 TB/s |
+| **blocked + 向量化** | **3.87 TB/s** |
+| **staged** | 1.63 TB/s |
 
-同一形状的按行 `cumsum`（fp16）：不用 shared memory、每线程从 global memory 按 blocked 读进寄存器 0.4 到 1.1 TB/s，经 shared 中转 2.77 TB/s。
+两组数据把收益分解成两部分：**合并贡献主要部分**，1.84 提到 3.35 以上；**指令数贡献其余部分**，striped 的 3.35 与向量化的 3.85 之差即是。顺序受约束时，向量化的 blocked 比 staged 快 2.4 倍，说明 staged 的一次 shared memory 中转与两次同步有实际开销。
 
 ## 2. 每线程按固定 stride 读 shared memory 时，给 stride 加 pad {#rule-2}
 

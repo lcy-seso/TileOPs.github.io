@@ -1366,13 +1366,96 @@ html[lang="zh"] .md-nav__title {
 }
 
 .md-typeset .tf-roofline .tf-rl-region-label {
-  fill: var(--md-default-fg-color--lighter);
+  fill: var(--md-default-fg-color--light);
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.08em;
 }
 
 .md-typeset figure.roofline figcaption {
+  margin-top: 0.5rem;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.78rem;
+  line-height: 1.7;
+  text-align: left;
+}
+
+/* Access-pattern figure (rule 1 of memory-bound-kernels).  One row of memory
+   cells per pattern; teal shading marks the sectors the hardware fetches, a
+   violet dot marks each element the instruction actually reads.  The ratio of
+   the two is the efficiency the prose quotes, so the two encodings carry the
+   whole argument and nothing else needs colour. */
+.md-typeset figure.access-patterns {
+  display: block;
+  width: 100%;
+  margin: 1.4em auto;
+  text-align: center;
+}
+
+.md-typeset figure.access-patterns p {
+  margin: 0;
+}
+
+.md-typeset .tf-access {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  margin: 0 auto;
+  font-family: var(--tf-body);
+}
+
+.md-typeset .tf-access .ap-sector {
+  fill: none;
+  stroke: var(--tf-line);
+  stroke-width: 1;
+}
+
+.md-typeset .tf-access .ap-sector--fetched {
+  fill: color-mix(in srgb, var(--tf-teal), transparent 88%);
+}
+
+/* shared memory: no sectors, so the row is drawn as one undivided surface */
+.md-typeset .tf-access .ap-sector--onchip {
+  fill: color-mix(in srgb, var(--tf-violet), transparent 92%);
+  stroke: color-mix(in srgb, var(--tf-violet), transparent 70%);
+  stroke-dasharray: 3 3;
+}
+
+.md-typeset .tf-access .ap-cell {
+  fill: none;
+  stroke: var(--tf-line-soft);
+  stroke-width: 0.75;
+}
+
+.md-typeset .tf-access .ap-dot {
+  fill: var(--tf-violet);
+}
+
+.md-typeset .tf-access .ap-title {
+  fill: var(--md-default-fg-color);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.md-typeset .tf-access .ap-sub {
+  fill: var(--md-default-fg-color--light);
+  font-family: var(--tf-mono);
+  font-size: 11px;
+}
+
+.md-typeset .tf-access .ap-note {
+  fill: var(--md-default-fg-color--light);
+  font-size: 12.5px;
+}
+
+/* --lighter maps to the hairline colour; as text it is illegible. */
+.md-typeset .tf-access .ap-scale {
+  fill: var(--md-default-fg-color--light);
+  font-size: 12px;
+}
+
+.md-typeset figure.access-patterns figcaption {
   margin-top: 0.5rem;
   color: var(--md-default-fg-color--light);
   font-size: 0.78rem;
