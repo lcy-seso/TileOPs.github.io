@@ -2,11 +2,11 @@
 
 ## 什么是访存受限
 
-在 GPU 上，一个 kernel 跑多快，取决于算力与带宽哪一个先成为瓶颈。TileOPs 用 [macro benchmark](https://github.com/tile-ai/TileOPs/tree/main/benchmarks/hardware) 测算出一个**[校准系数](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)**：硬件 spec 给出的理论峰值乘以它得到实际可达的有效值，以此作为性能优化的指导标准。我们在H200 上实测出 [fp32 FMA 的算力为 **57.27** TFLOP/s，访存带宽为 **4.07** TB/s](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)；两者相除，得到的就是 roofline 的**拐点**（ridge point）：
+在 GPU 上，一个 kernel 跑多快，取决于算力与带宽哪一个先成为瓶颈。TileOPs 用 [macro benchmark](https://github.com/tile-ai/TileOPs/tree/main/benchmarks/hardware) 测算出一个**[校准系数](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)**：硬件 spec 给出的理论峰值乘以校准系数，得到实际可达的有效值，以此作为性能优化的指导标准。我们在H200 上实测出 [fp32 FMA 的算力为 **57.27** TFLOP/s，访存带宽为 **4.07** TB/s](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)。roofline 的**拐点**（ridge point）是带宽斜线与算力上限这两段的交点，两者相除给出它的横坐标，也就是拐点处的算术强度 **14.07 flop/byte** —— 算力与带宽同时用满时，每搬运一个字节对应的浮点运算次数：
 
 <figure class="roofline" markdown="1">
 
-<svg class="tf-roofline" viewBox="0 0 520 306" role="img" aria-label="H200 的 roofline：带宽上限 4.07 TB/s 的斜线在每字节 14 次浮点运算处与 57.27 TFLOP/s 的算力上限相交；silu 位于斜线左端，只够到算力上限的 5%。">
+<svg class="tf-roofline" viewBox="0 0 520 306" role="img" aria-label="H200 的 roofline：带宽上限 4.07 TB/s 的斜线在每字节 14 次浮点运算处与 57.27 TFLOP/s 的算力上限相交；silu 位于斜线左端，可达算力为算力上限的 9%。">
 <path class="tf-rl-region" d="M 52.0 250.0 L 52.0 217.9 L 357.4 67.1 L 357.4 250.0 Z"/>
 <line class="tf-rl-grid" x1="115.4" y1="52" x2="115.4" y2="250"/>
 <text class="tf-rl-tick" x="115.4" y="270" text-anchor="middle">1</text>
@@ -45,31 +45,29 @@
 <circle class="tf-rl-ridge" cx="357.4" cy="67.1" r="6"/>
 <text class="tf-rl-label tf-rl-label--ridge" x="370.4" y="89.1">拐点</text>
 <text class="tf-rl-sub" x="370.4" y="107.1">每字节 14 次</text>
-<circle class="tf-rl-point" cx="89.1" cy="199.6" r="5.5"/>
-<text class="tf-rl-label tf-rl-label--point" x="102.1" y="219.6">silu (fp16)</text>
-<text class="tf-rl-sub" x="102.1" y="237.6">3 次 / 4 字节，只够到 3.1</text>
+<circle class="tf-rl-point" cx="135.8" cy="176.5" r="5.5"/>
+<text class="tf-rl-label tf-rl-label--point" x="148.8" y="196.5">silu (fp16)</text>
+<text class="tf-rl-sub" x="148.8" y="214.5">5 次 / 4 字节，上限 5.1</text>
 <text class="tf-rl-roof-label" x="152.5" y="153.3" transform="rotate(-30 152.5 153.3)">带宽上限 4.07 TB/s</text>
 <text class="tf-rl-roof-label" x="492.0" y="54.1" text-anchor="end">算力上限 57.3 TFLOP/s</text>
 </svg>
 
-<figcaption>图上这条折线就是 roofline，任何 kernel 的性能点都落在它以下。拐点以左，上限是「算术强度 × 带宽」，随强度线性上升；拐点以右，上限就是算力峰值，不再随强度变化。<code>silu</code> 每搬运 4 个字节只做 3 次运算，算术强度只有拐点的 1/19，所以即便带宽完全用满，也只能达到算力上限的 5%。</figcaption>
+<figcaption>图上这条折线就是 roofline，任何 kernel 的性能点都落在它以下。拐点以左，上限是「算术强度 × 带宽」，可达算力随算术强度线性上升；拐点以右，上限就是算力峰值，不再随算术强度变化。<code>silu</code> 每搬运 4 个字节做 5 次运算，算术强度 1.25 flop/byte，只有拐点的 1/11，所以即便带宽完全用满，也只能达到算力上限的 9%。</figcaption>
 
 </figure>
 
 在进入下文之前，我们先给出两条会被反复用到的硬件事实：
 
-- **一次 global memory 读取的数据访问单位是 32 字节的 sector。** sector 同时也是缓存内部搬运数据的单位：
+- **一次 global memory 读取的数据访问单位是 32 字节的 sector**：
 
     | 名称 | 大小 | 是什么 |
     | --- | --- | --- |
-    | cache line | 128 字节 | L1 与 L2 的 cache line，也是 tag（查找时用的键）的单位 |
+    | cache line | 128 字节 | L1 与 L2 的缓存行，也是缓存查找的单位 |
     | **sector** | **32 字节** | 一条 cache line 由 4 个 sector 组成，L1 与 L2 之间按 sector 传输 |
 
     缓存查找时以 cache line 为单位，搬运数据时以 sector 为单位：某个 sector 未命中，L1 就只向 L2 请求这一个 sector，不必把整条 cache line 都拉过来。由此得到的结论是**取 1 个字节和取满 32 个字节的代价相同**。于是一条访存指令的好坏由 **sector 利用率**衡量：`真正用到的字节 / (覆盖的 sector 数 × 32)`。
 
-- **shared memory 由 32 条 bank 构成，每条 bank 宽 4 字节，32 条可以同时被访问。** 一个地址落在哪条 bank 上，由 `(字节地址 / 4) mod 32` 决定。多个线程并发访问 shared memory 时，只要它们落在不同的 bank 上，这些请求就能被并行地服务完。
-
-    落在同一条 bank 上则不然。同一个 warp 内若有多个线程访问一条 bank 上的**不同** word，硬件会把这次请求拆成若干次无冲突的请求依次完成，拆分的次数就是冲突的路数。例外是**读取同一个** word：任意两个线程只要落在同一个 word 内（哪怕取的是其中不同的字节），彼此就不冲突，这个 word 会被广播给所有请求它的线程；分布在不同 bank 上的多个广播还会合并为一次 multicast。这两种情形都不产生冲突。（若多个线程写入同一地址，只有一个写入生效，是哪一个未定义。）
+- **shared memory 由 32 个 bank 构成，每 bank 宽 4 字节，32 个bank可以被并发访问。** 一个地址落在哪个 bank 上，由 `(字节地址 / 4) mod 32` 决定。多个线程并发访问 shared memory 时，只要它们落在不同的 bank 上，这些访问就在同一个周期内一起完成。 同一个 warp 内若有多个线程访问一条 bank 上的**不同** word，硬件会把这次请求拆成若干次无冲突的请求依次完成，拆分的次数就是冲突的路数。例外是**读取同一个** word：任意两个线程只要落在同一个 word 内（哪怕取的是其中不同的字节），这个 word 会被广播给所有请求它的线程；分布在不同 bank 上的多个广播还会合并为一次 multicast。这两种情形都不产生冲突。（若多个线程写入同一地址，只有一个写入生效，是哪一个未定义。）
 
 ## 确认 DRAM 带宽是否为当前的瓶颈 {#regime}
 
@@ -79,18 +77,18 @@
 
 !!! warning "适用范围"
 
-    这组条件之外，主要瓶颈可能转到别处，个别结论会反转。
+    这组条件之外，主要性能瓶颈可能由别的因素决定，这里给出的一些结论会反转。
 
-下表按这两个条件划出三个区间，给出各自的判据，以及各条法则在其中的用法；表中列出的是主导因素，kernel 越复杂，同时起作用的因素越多：
+下表按这两个条件划出三个区间，逐行给出判据与本文各条经验法则在其中的用法。表里的瓶颈是主导因素，kernel 越复杂，同时起作用的因素越多：
 
 | 区间 | 判据 | 主要瓶颈 | 各条法则的用法 |
 | --- | --- | --- | --- |
 | 带宽饱和 | 输入 > 60 MiB，block 数在 SM 数的两倍以上 | DRAM 带宽，即 sector 利用率 | 直接适用 |
-| 数据小 | 输入装得进 L2，单次耗时在几十微秒以内 | kernel 发射的固定开销、缓存状态 | 只需避开各条的反例，换写法没有收益 |
+| 数据小 | 输入装得进 L2，单次耗时在几十微秒以内 | kernel 发射的固定开销、缓存状态 | 只需避开各条的反例，换 access pattern 没有收益 |
 | block 少 | block 数不到 SM 数的两倍 | 每条载入指令的宽度、在飞的字节数 | 保住载入宽度优先，改动逐个实测 |
 
-- **数据小时，发射开销与缓存状态占主导，写法分不出名次。** 同一组行求和 kernel —— staged、交给 layout inference 的逐元素 `T.Parallel`、`T.copy` 进 fragment、手写向量化 blocked（fp16，256 线程，时钟未锁）—— 在 65536 × 4096（512 MB）上测得 4.20 到 4.43 TB/s，都接近实测带宽的上限，彼此相差不超过 6%；换成 2048 × 4096（16 MB，装得进 L2）后单次耗时十几微秒，同一种写法两次测量之间可差三倍。这个区间里更换访存模式没有收益，该查的是 kernel 的发射次数与算法本身。
-- **block 少时，载入宽度带来的收益大于合并规则算出的差别。** warp 数量不足，靠并发的请求数掩盖访存延迟不再可行，只能让每个请求更宽、每个线程持有更多在飞的字节。以载入宽度换取其他好处的改法，在这个区间都可能反转；[第 2 条](#bank-conflict)的 pad 取舍给出一个实测的反例。
+- **数据小时，发射开销与缓存状态占主导。** 同一个行求和 kernel 的四种 access pattern（fp16，256 线程，时钟未锁）在 65536 × 4096（512 MB）上测得的访存带宽是 4.20 到 4.43 TB/s，彼此相差不超过 6%；换成 2048 × 4096（16 MB，装得进 L2）后单次耗时十几微秒，同一个 access pattern 两次测量之间可差三倍。这个区间里换 access pattern 没有收益，制约性能的是别的因素。
+- **block 少时，载入宽度带来的收益大于合并规则算出的差别。** warp 数量不足，靠并发的请求数掩盖访存延迟不再可行，只能让每个请求更宽、每个线程持有更多在飞的字节。以载入宽度换取其他好处的改法，在这个区间都可能反转。
 
 ## 1. 合并 global memory 的访存 {#coalescing}
 
@@ -100,9 +98,9 @@
 2. **按 32 字节对齐** —— 起始地址是 32 的倍数，一段数据不会多占一个 sector；
 3. **每个线程一次取满 16 字节** —— 一条指令覆盖 $32 \times 16 = 512$ 个连续字节，即 16 个满载的 sector。
 
-三个因素同时成立时对硬件最友好。
+三个因素同时成立时，这条访存指令对硬件最友好。
 
-一个线程要读 $V$ 个元素时（$V$ = 元素数目 / 线程数），有四种写法。
+一个线程要读 $V$ 个元素时（$V$ = 一行的元素数 / 线程数），有四种 access pattern。
 
 **blocked** —— 每个线程负责一段连续的元素。固定 `c` 时相邻线程的地址相隔 $V$ 个元素，违反第一个因素，sector 利用率是 $1/V$：
 
@@ -141,11 +139,13 @@ for c in T.serial(V):
     acc[0] = acc[0] * sh[tx, c]
 ```
 
-四种写法的差别在于：**「哪个线程读哪些元素、一次读多宽」这个映射由谁决定。**
+四种 access pattern 的差别在于：**「哪个线程读哪些元素、一次读多宽」这个映射由谁决定。**
 
 `T.serial` 的语义是循环体由单个线程顺序执行，索引表达式被逐字翻译成访存指令，不做合并也不做向量化 —— 编程者写出的模式就是硬件看到的模式。
 
-`T.vectorized`、`T.Parallel`、`T.copy` 则由 TileLang 的 **layout inference** 决定，三者的差别在于编程者还需要写明多少：`T.vectorized` 要写明每线程一次访问的宽度，线程映射由 layout inference 推导；`T.Parallel` 连宽度也不必写，循环维度怎么分给线程、一次读多宽都由它决定；`T.copy` 只写源和目标两个区域，整段搬运由它生成（需要接管推导结果时，另有 `coalesced_width` 与 `loop_layout` 两个参数）。剩下的向量化、地址对齐、以及在 shared memory 一侧避开 bank 冲突，都由它负责 —— 这些正是对硬件友好但手写容易出错的部分。
+`T.vectorized`、`T.Parallel`、`T.copy` 则由 TileLang 的 **layout inference** 决定，三者的差别在于编程者还需要写明多少：`T.vectorized` 要写明每线程一次访问的宽度，线程映射由 layout inference 推导；`T.Parallel` 连宽度也不必写，循环维度怎么分给线程、一次读多宽都由它决定；`T.copy` 只写源和目标两个区域，整段搬运由它生成（需要接管推导结果时，另有 `coalesced_width` 与 `loop_layout` 两个参数）。剩下的向量化、地址对齐、以及在 shared memory 一侧避开 bank 冲突，都由 layout inference 负责 —— 这些正是对硬件友好但手写容易出错的部分。
+
+**用 `T.serial` 手写下标时，上面三个因素要自己逐一保证；交给 layout inference 时，只需写明搬运的范围。** 三者之间怎么选、各自能跑到多少带宽，见下面的实测。
 
 <figure class="access-patterns" markdown="1">
 
@@ -489,9 +489,11 @@ for c in T.serial(V):
 
 ### 实测
 
-H200，锁频 1830 MHz，bf16，每行 4096 个元素，输入 512 MB（**必须大于 L2 的 60 MiB**，否则测到的是 L2 带宽）。单位 TB/s，三次跑一致到 ±0.5%。staged 给两个数：不加 pad（stride 撞上 bank 冲突，见[第 2 条](#bank-conflict)）与扫 pad 后的最优值。
+我们对两个 workload 在 H200 上进行实测，比较上面四种 access pattern 各自能跑到多少**访存带宽**（搬运的字节数除以 kernel 耗时，单位 TB/s），这两个 workload 的计算对元素的处理顺序有不同要求 —— 这个要求会决定哪几种 access pattern 可用。
 
-按行 `prod`，与顺序无关，只读：
+测试中 SM 时钟锁在 1830 MHz；输入 bf16 的 $65536 \times 4096$（512 MB，**必须大于 L2 的 60 MiB**，否则测到的是 L2 带宽）；每个配置跑三次，三次的结果一致到 ±0.5%。staged 在表里占两列：一列不加 pad（此时 stride 恰好是 $V$ 个 word，产生 bank 冲突，见[第 2 条](#bank-conflict)），一列是在若干个 pad 取值中测到的最优值。
+
+**workload 1，按行求乘积**：一行的元素相乘，先后顺序不影响结果，每行只输出一个值，四种 access pattern 都可用。
 
 | 线程数 | $V$ | blocked<br>TB/s | striped<br>TB/s | blocked + 向量化<br>TB/s | staged 不加 pad<br>TB/s | staged 加 pad<br>TB/s |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -501,7 +503,7 @@ H200，锁频 1830 MHz，bf16，每行 4096 个元素，输入 512 MB（**必须
 | 64 | 64 | 0.48 | 3.49 | 3.32 | 2.80 | **4.02**{ .win } |
 | 32 | 128 | 0.47 | 3.43 | 3.11 | 2.83 | **3.88**{ .win } |
 
-按行的串行前缀积，顺序受约束，读加写。striped 在这里不可用 —— 它不让线程持有连续的一段：
+**workload 2，按行求串行前缀积**：每个位置的结果依赖它左边的全部元素，顺序不能变，整行都要写回。striped 在这里不可用（线程无法持有连续的一段）。
 
 | 线程数 | $V$ | blocked<br>TB/s | blocked + 向量化<br>TB/s | staged 不加 pad<br>TB/s | staged 加 pad<br>TB/s |
 | --- | --- | --- | --- | --- | --- |
@@ -513,17 +515,17 @@ H200，锁频 1830 MHz，bf16，每行 4096 个元素，输入 512 MB（**必须
 
 ### 取舍
 
-1. **逐元素的 blocked 在 $V > 1$ 时总是最差的写法。** 固定 `c` 时相邻线程的地址相隔 $V$ 个元素，sector 利用率是 $1/V$，所以 $V$ 越大越差 —— 上表从 $V = 8$ 的 3.02 掉到 $V = 64$ 的 0.48。这个关系由访存合并的规则决定，不随形状改变。
+1. **逐元素的 blocked 在 $V > 1$ 时总是最差的 access pattern。** 固定 `c` 时相邻线程的地址相隔 $V$ 个元素，sector 利用率是 $1/V$，所以 $V$ 越大越差 —— workload 1 的表里从 $V = 8$ 的 3.02 掉到 $V = 64$ 的 0.48。这个关系由访存合并的规则决定，不随形状改变。
 
-2. **$V$ 小时用向量化的 blocked；$V$ 大到寄存器压力压低占用率时，改用加了 pad 的 staged。** 向量化把整段留在寄存器里（bf16 是每线程 $V/2$ 个），staged 把它放进 shared memory，用一次同步换回寄存器。翻转点取决于 kernel 里其余部分还剩多少寄存器预算，不是一个固定的 $V$：上面两组 workload 在同一个行宽下就分别落在 $V = 64$ 与 $V = 32$。**这个翻转点要在自己的 kernel 上测。**
+2. **$V$ 小时用向量化的 blocked；$V$ 大到寄存器压力压低占用率时，改用加了 pad 的 staged。** 向量化把整段留在寄存器里（bf16 是每线程 $V/2$ 个），staged 把它放进 shared memory，用一次同步换回寄存器。翻转点取决于 kernel 里其余部分还剩多少寄存器预算，不是一个固定的 $V$：上面两个 workload 在同一个行宽下就分别落在 $V = 64$ 与 $V = 32$。**这个翻转点要在自己的 kernel 上测。**
 
-3. **staged 的 shared 缓冲要避开 bank 冲突。** 声明成 `(threads, V)` 时 stride 恰好是 $V$ 个 word，$V$ 为 2 的幂就一定撞上冲突；pad 的算法与候选见[第 2 条](#bank-conflict)。上表里同一个配置不加 pad 是 0.46，加 pad 是 3.69。
+3. **staged 的 shared 缓冲要避开 bank 冲突。** 声明成 `(threads, V)` 时 stride 恰好是 $V$ 个 word，$V$ 为 2 的幂就一定产生冲突；pad 的算法与候选见[第 2 条](#bank-conflict)。workload 2 的表里，同一个配置不加 pad 是 0.46，加 pad 是 3.69。
 
-4. **striped 完全合并，但每个元素要发一条指令。** 所以它好于逐元素的 blocked、差于向量化的 blocked（$V = 16$ 上 3.31 对 1.83 与 3.81），适合改动量比最后一点带宽更重要的场合。它让线程持有的元素不连续，因此要求连续一段的计算（例如串行前缀）用不了。
+4. **striped 完全合并，但每个元素要发一条指令。** 所以它好于逐元素的 blocked、差于向量化的 blocked（$V = 16$ 上 3.31 对 1.83 与 3.81），适合改动量比最后一点带宽更重要的场合。它让线程持有的元素不连续，因此要求线程持有连续一段的计算（例如串行前缀）用不了它。
 
-下面两段是推荐写法的完整模板，`M`、`N`、`V`、`threads`、`pad`、`dtype` 都是编译期常量。本条开头的四段代码里，逐元素的 blocked 是反例，不要照抄；striped 可用但不是最快的一种（取舍第 4 条）。
+下面两段是推荐 access pattern 的完整模板，`M`、`N`、`V`、`threads`、`pad`、`dtype` 都是编译期常量。本条开头的四段代码里，逐元素的 blocked 是反例，不要照抄；striped 可用但不是最快的一种（取舍第 4 条）。
 
-**推荐写法，小 $V$** —— 向量化的 blocked：
+**推荐的 access pattern，小 $V$** —— 向量化的 blocked：
 
 ```python
 @T.prim_func
@@ -543,7 +545,7 @@ def main(X: T.Tensor((M, N), dtype), Out: T.Tensor((M, threads), "float32")):
         Out[row, tx] = acc[0]
 ```
 
-**推荐写法，大 $V$** —— 加了 pad 的 staged（翻转点见取舍第 2 条）：
+**推荐的 access pattern，大 $V$** —— 加了 pad 的 staged（翻转点见取舍第 2 条）：
 
 ```python
 @T.prim_func
@@ -581,7 +583,7 @@ def main(X: T.Tensor((M, N), dtype), Out: T.Tensor((M, threads), "float32")):
 
 ### 实测
 
-H200，SM 时钟锁在 1830 MHz。fp16，每行 4096 个元素，行数取 65536 使输入为 512 MB（大于 60 MiB 的 L2）。kernel 把整行搬进 `(threads, chunk + pad)` 的 shared 缓冲，逐段做串行前缀积再写回，读加写共 1 GB。括号内是上面公式预测的冲突路数：
+H200，SM 时钟锁在 1830 MHz。fp16，输入 $65536 \times 4096$（512 MB，大于 60 MiB 的 L2）。kernel 把整行搬进 `(threads, chunk + pad)` 的 shared 缓冲，逐段做串行前缀积再写回，读加写共 1 GB。括号内是上面公式预测的冲突路数：
 
 | chunk | 线程数 | pad = 0<br>TB/s | pad = 2<br>TB/s | pad = 4<br>TB/s | pad = 8<br>TB/s | pad = 16<br>TB/s |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -603,13 +605,11 @@ H200，SM 时钟锁在 1830 MHz。fp16，每行 4096 个元素，行数取 65536
 
 两个区间的边界要在自己的 kernel 上测；block 数与 SM 数同量级时先保对齐。
 
-**pad 之后最优的 chunk 会变。** `pad = 0` 时最优是 `chunk = 16`（1.63），`pad = 4` 时最优是 `chunk = 64`（3.70）。冲突消掉之后，更大的段意味着更少线程争用同一批 bank，最优点因此往大移。改完 pad 要重扫 chunk。
+**pad 之后最优的 chunk 会变。** `pad = 0` 时最优是 `chunk = 16`（1.63），`pad = 4` 时最优是 `chunk = 64`（3.70）。冲突消掉之后，更大的段意味着更少线程争用同一批 bank，最优点因此往大移。改完 pad 要把 chunk 重新试一遍。
 
 **这一条只在 staged 路线上出现。** 第 1 条的实测表明，向量化的 blocked 通常更快，那条路线把数据放进寄存器，不经 shared memory，也就没有 bank 冲突可言。只有整行需要被 block 内所有线程共享时才走 staged，届时这一条适用。
 
-### 代码
-
-反例，stride 恰好是 32 个 word 的倍数：
+下面两段是 shared 缓冲的声明，差别只在 stride。反例，stride 恰好是 32 个 word 的倍数：
 
 ```python
 staged = T.alloc_shared((threads, chunk), dtype)   # stride = chunk
@@ -619,14 +619,14 @@ staged = T.alloc_shared((threads, chunk), dtype)   # stride = chunk
 
 ```python
 # fp16：pad = 2 算出来是 1 路，pad = 4 是 2 路，两者都可用；
-# 上表四组 chunk 里 pad = 4 一律略好，所以取 4，换形状时重扫一遍
+# 上表四组 chunk 里 pad = 4 一律略好，所以取 4，换形状时重新试一遍
 pad = 4
 staged = T.alloc_shared((threads, chunk + pad), dtype)
 ```
 
 ## 3. 用 T.copy 把整行读进 fragment {#registers}
 
-reduction 类算子通常把输入看作二维，一个 block 负责其中一行 —— 例如按行求最大值。这一行的每个元素都要被这个 block 读一遍，写法有三种：
+reduction 类算子通常把输入看作二维，一个 block 负责其中一行 —— 例如按行求最大值。这一行的每个元素都要被这个 block 读一遍，access pattern 有三种：
 
 1. 逐个元素从 global memory 读；
 2. 一次 `T.copy` 把整行搬进 fragment，再遍历；
@@ -638,11 +638,11 @@ reduction 类算子通常把输入看作二维，一个 block 负责其中一行
 
 线程映射由 layout inference 给出，是合并的：固定迭代序号时相邻线程的地址相隔 16 字节，一个 warp 的一条指令覆盖 512 连续字节。**但每个线程持有的不是连续的一段** —— 行宽 4096、128 线程时，每线程拿到 4 块各 8 个元素，块与块之间相隔 1024 个元素。因此要求每线程持有连续一段的计算（例如串行前缀）用不了这条路线，那种情形见[第 1 条](#coalescing)。
 
-还有一个写法上的差别。逐个元素读那种写法要自己算下标 —— `index = it * threads + tx` —— 并且要加 `if index < N` 的边界检查，否则最后一轮会越界。遍历 fragment 时循环变量本身就是列下标，两样都不需要。下面的代码可以对照。
+还有一个代码上的差别。逐个元素读那种 access pattern 要自己算下标 —— `index = it * threads + tx` —— 并且要加 `if index < N` 的边界检查，否则最后一轮会越界。遍历 fragment 时循环变量本身就是列下标，两样都不需要。下面的代码可以对照。
 
 ### 实测
 
-H200，SM 时钟锁在 1830 MHz，fp16，输入 512 MB（大于 60 MiB 的 L2）。kernel 求每行的最大值：反例逐个元素从 global memory 读，正例先 `T.copy` 进 fragment。行宽固定、只变 block 的线程数，因此每线程持有的元素数是唯一变量：
+H200，SM 时钟锁在 1830 MHz，fp16，输入 $65536 \times 4096$（512 MB，大于 60 MiB 的 L2）。kernel 求每行的最大值：反例逐个元素从 global memory 读，正例先 `T.copy` 进 fragment。行宽固定、只变 block 的线程数，因此每线程持有的元素数是唯一变量：
 
 | 行宽 | 线程数 | 每线程元素 | 每线程寄存器 | 逐元素<br>TB/s | `T.copy` 进 fragment<br>TB/s |
 | --- | --- | --- | --- | --- | --- |
@@ -677,9 +677,7 @@ fragment 一侧在 8 到 128 个寄存器之间基本平坦，`4.24` 到 `4.44` 
 
 **fragment 要被反复遍历时，才需要核对寄存器数量。** 判断依据是「每线程持有的 32 位量 = 元素数 × 元素字节 / 4」，越过 255 且要多次遍历时，改成分块处理或退回 shared memory（[第 2 条](#bank-conflict)）。
 
-### 代码
-
-反例，逐个元素从 global memory 读：
+下面两段读的是同一行数据，差别在于数据落在哪里。反例，逐个元素从 global memory 读：
 
 ```python
 for it in T.serial(iterations):
@@ -714,7 +712,7 @@ Fatal: Cannot convert type boolx8 to CUDA type
 
 ### 实测
 
-H200，SM 时钟锁在 1830 MHz。`isnan`：fp32 输入 512 MB（大于 60 MiB 的 L2），1 字节输出，读加写共 640 MB。同一个算子写成两种形态 —— 显式 `T.vectorized` 读写本地数组，或者纯 `T.serial` 逐元素：
+H200，SM 时钟锁在 1830 MHz。`isnan`：fp32 输入 134217728 个元素（512 MB，大于 60 MiB 的 L2），1 字节输出，读加写共 640 MB。同一个算子写成两种形态 —— 显式 `T.vectorized` 读写本地数组，或者纯 `T.serial` 逐元素：
 
 | 每线程元素 | 输出 dtype | `T.vectorized`<br>TB/s | `T.serial`<br>TB/s |
 | --- | --- | --- | --- |
@@ -741,9 +739,7 @@ H200，SM 时钟锁在 1830 MHz。`isnan`：fp32 输入 512 MB（大于 60 MiB �
 
 **收益有限，别期待太多。** 4.11 → 4.28 是 4%，而向量化本身相对标量是 4.07 → 1.16 反向的三倍多。先确保向量化，再谈这一条。
 
-### 代码
-
-反例，元素数按输入宽度定，且输出是 bool：
+下面两段的差别在每线程元素数怎么定、以及输出用什么 dtype。反例，元素数按输入宽度定，且输出是 bool：
 
 ```python
 npt = _BYTES_PER_THREAD // elem_bytes        # 只看输入宽度
