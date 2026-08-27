@@ -1490,3 +1490,72 @@ html[lang="zh"] .md-nav__title {
   font-family: var(--tf-mono);
   font-size: 10px;
 }
+
+/* ---------------------------------------------------------------------------
+   Bank-conflict figure (rule 2). 32 bank columns per panel; the count printed
+   in a cell is how many of a warp's threads land on it, and the largest count
+   is the conflict degree. Teal = one thread per bank (the good case), rose =
+   several (the cost), empty = no thread lands there.
+   --------------------------------------------------------------------------- */
+
+.md-typeset .tf-bank {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  margin: 0 auto;
+  font-family: var(--tf-body);
+}
+
+.md-typeset .tf-bank .bk-cell {
+  fill: none;
+  stroke: var(--tf-line-soft);
+  stroke-width: 0.75;
+}
+
+.md-typeset .tf-bank .bk-cell--one {
+  fill: color-mix(in srgb, var(--tf-teal), transparent 82%);
+}
+
+.md-typeset .tf-bank .bk-cell--many {
+  fill: color-mix(in srgb, var(--tf-rose), transparent 74%);
+}
+
+.md-typeset .tf-bank .bk-count {
+  fill: var(--md-default-fg-color);
+  font-family: var(--tf-mono);
+  font-size: 9px;
+}
+
+.md-typeset .tf-bank .bk-title {
+  fill: var(--md-default-fg-color);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.md-typeset .tf-bank .bk-sub {
+  fill: var(--md-default-fg-color--light);
+  font-family: var(--tf-mono);
+  font-size: 11px;
+}
+
+.md-typeset .tf-bank .bk-note,
+.md-typeset .tf-bank .bk-scale {
+  fill: var(--md-default-fg-color--light);
+  font-size: 12px;
+}
+
+.md-typeset .tf-bank .bk-axis {
+  fill: var(--md-default-fg-color--light);
+  font-family: var(--tf-mono);
+  font-size: 10px;
+}
+
+.md-typeset figure.bank-conflict figcaption {
+  max-width: none;
+  margin-top: 0.5rem;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.7rem;
+  line-height: 1.7;
+  text-align: left;
+}
