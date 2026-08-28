@@ -67,8 +67,6 @@ nav:
       - performance-guides/memory-bound/index.md
       - Global Memory Access: performance-guides/memory-bound/global-memory-access.md
       - Shared Memory Access: performance-guides/memory-bound/shared-memory-access.md
-    - Transcendental Functions: performance-guides/transcendental.md
-    - TileLang Pitfalls: performance-guides/tilelang-pitfalls.md
   - Design:
     - design/index.md
     - Architecture: design/architecture.md
@@ -181,8 +179,6 @@ plugins:
             Memory-Bound Kernels: 访存受限 kernel
             Global Memory Access: 优化 global memory 访问
             Shared Memory Access: 优化 shared memory 访问
-            Transcendental Functions: 超越函数
-            TileLang Pitfalls: TileLang 使用陷阱
             Timeline Trace: 时间线追踪
   - include-markdown:
       rewrite_relative_urls: false
