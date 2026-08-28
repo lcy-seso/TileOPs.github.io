@@ -59,7 +59,10 @@ nav:
   - Performance Guides:
     - performance-guides/index.md
     - Timeline Trace: performance-guides/trace-timeline.md
-    - Optimizing Access Patterns: performance-guides/memory-bound-kernels.md
+    - Memory-Bound Kernels:
+      - performance-guides/memory-bound/index.md
+      - Global Memory Access: performance-guides/memory-bound/global-memory-access.md
+      - Shared Memory Access: performance-guides/memory-bound/shared-memory-access.md
     - Transcendental Functions: performance-guides/transcendental.md
     - TileLang Pitfalls: performance-guides/tilelang-pitfalls.md
   - Design:
@@ -167,7 +170,9 @@ plugins:
             Trace: Trace
             Benchmarks: 性能数据
             Performance Guides: 性能指南
-            Optimizing Access Patterns: 优化 access pattern
+            Memory-Bound Kernels: 访存受限 kernel
+            Global Memory Access: 优化 global memory 访问
+            Shared Memory Access: 优化 shared memory 访问
             Transcendental Functions: 超越函数
             TileLang Pitfalls: TileLang 使用陷阱
             Timeline Trace: 时间线追踪
