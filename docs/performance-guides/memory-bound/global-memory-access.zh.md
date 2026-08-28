@@ -1,10 +1,10 @@
 # 优化 global memory 访问
 
-一个 warp 的 32 个线程同时访问 global memory 时，硬件把这些访问合并成尽可能少的事务。这一页讲合并要满足哪三个因素、四种 access pattern 各自满足几个，以及它们在两个 workload 上的实测对比。
+一个线程要读一行里的多个元素时，写法有四种。这一页给出它们在两个 workload 上的实测对比，以及怎么挑一种。
 
 ## 确认 DRAM 带宽是否为当前的瓶颈 {#regime}
 
-[Elementwise](https://tile-ai.github.io/TileOPs.github.io/api/elementwise/) 与 [Reduction](https://tile-ai.github.io/TileOPs.github.io/api/reduction/) 是典型的访存受限 kernel。我们把调优这两类 kernel 过程中遇到的常见问题整理成下面两篇，每条建议都给出触发的条件、成因，以及反例与正例代码。
+[Elementwise](https://tile-ai.github.io/TileOPs.github.io/api/elementwise/) 与 [Reduction](https://tile-ai.github.io/TileOPs.github.io/api/reduction/) 是典型的访存受限 kernel。下面每条建议都写明触发的条件、成因，以及反例与正例代码。
 
 这一页的实测都在同一组条件下取得：**输入大于 L2 的 60 MiB，且 block 数足以填满整卡**（H200 有 132 个 SM）。此时 DRAM 带宽是主要瓶颈，访存模式的差别直接反映在性能上。
 
@@ -12,12 +12,12 @@
 
     这组条件之外，主要性能瓶颈可能由别的因素决定，这里给出的一些结论会反转。
 
-下表按这两个条件划出三个区间，逐行给出判据与本页结论在其中的用法。表里的瓶颈是主导因素，kernel 越复杂，同时起作用的因素越多：
+下表按这两个条件划出三个区间，逐行给出判据，以及这两页的结论在各区间里怎么用。表里的瓶颈是主导因素，kernel 越复杂，同时起作用的因素越多：
 
-| 区间 | 判据 | 主要瓶颈 | 本页结论的用法 |
+| 区间 | 判据 | 主要瓶颈 | 结论的用法 |
 | --- | --- | --- | --- |
 | 带宽饱和 | 输入 > 60 MiB，block 数在 SM 数的两倍以上 | DRAM 带宽，即 sector 利用率 | 直接适用 |
-| 数据小 | 输入装得进 L2，单次耗时在几十微秒以内 | kernel 发射的固定开销、缓存状态 | 只需避开各条的反例，换 access pattern 没有收益 |
+| 数据小 | 输入装得进 L2，单次耗时在几十微秒以内 | kernel 发射的固定开销、缓存状态 | 避开反例即可，换 access pattern 没有收益 |
 | block 少 | block 数不到 SM 数的两倍 | 每条载入指令的宽度、在飞的字节数 | 保住载入宽度优先，改动逐个实测 |
 
 - **数据小时，发射开销与缓存状态占主导。** 同一个行求和 kernel 的四种 access pattern（fp16，256 线程，时钟未锁）在 65536 × 4096（512 MB）上测得的访存带宽是 4.20 到 4.43 TB/s，彼此相差不超过 6%；换成 2048 × 4096（16 MB，装得进 L2）后单次耗时十几微秒，同一个 access pattern 两次测量之间可差三倍。这个区间里换 access pattern 没有收益，制约性能的是别的因素。
