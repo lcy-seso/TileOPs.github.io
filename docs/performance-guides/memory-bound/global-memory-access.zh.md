@@ -455,7 +455,7 @@ for c in T.serial(V):
 | 64 | 64 | 0.26 | 1.80 | 0.46 | **3.69**{ .win } |
 | 32 | 128 | 0.27 | 1.60 | 0.46 | **3.24**{ .win } |
 
-## 怎么选
+## access pattern 的取舍
 
 1. **逐元素的 blocked 在 $V > 1$ 时总是最差的 access pattern。** 固定 `c` 时相邻线程的地址相隔 $V$ 个元素，sector 利用率是 $1/V$，所以 $V$ 越大越差 —— workload 1 的表里从 $V = 8$ 的 3.02 掉到 $V = 64$ 的 0.48。这个关系由访存合并的规则决定，不随形状改变。
 
@@ -465,7 +465,7 @@ for c in T.serial(V):
 
 4. **striped 完全合并，但每个元素要发一条指令。** 所以它好于逐元素的 blocked、差于向量化的 blocked（$V = 16$ 上 3.31 对 1.83 与 3.81），适合改动量比最后一点带宽更重要的场合。它让线程持有的元素不连续，因此要求线程持有连续一段的计算（例如串行前缀）用不了它。
 
-下面两段是推荐 access pattern 的完整模板，`M`、`N`、`V`、`threads`、`pad`、`dtype` 都是编译期常量。本页开头的四段代码里，逐元素的 blocked 是反例，不要照抄；striped 可用但不是最快的一种（见上面的第 4 条建议）。
+下面两段是推荐 access pattern 的完整模板，`M`、`N`、`V`、`threads`、`pad`、`dtype` 都是编译期常量。本页开头的四段代码里，逐元素的 blocked 是反例，不要照抄；striped 可用但不是最快的一种（见上面取舍的第 4 条）。
 
 **推荐的 access pattern，小 $V$** —— 向量化的 blocked：
 
@@ -487,7 +487,7 @@ def main(X: T.Tensor((M, N), dtype), Out: T.Tensor((M, threads), "float32")):
         Out[row, tx] = acc[0]
 ```
 
-**推荐的 access pattern，大 $V$** —— 加了 pad 的 staged（翻转点见上面的第 2 条建议）：
+**推荐的 access pattern，大 $V$** —— 加了 pad 的 staged（翻转点见上面取舍的第 2 条）：
 
 ```python
 @T.prim_func

@@ -232,7 +232,7 @@ stride 由 `chunk` 决定，而 `chunk` 通常由算法决定，往往无法任�
 
 </figure>
 
-## pad 怎么选
+## pad 该取多少
 
 判据由上面的式子给出，**两条都要满足**：
 
@@ -311,7 +311,7 @@ H200，SM 时钟锁在 1830 MHz。fp16，输入 $65536 \times 4096$（512 MB，�
 
 3. **`chunk` 变了要重算 pad。** pad 写成固定字节数，等于假定 $\gcd(S, 32)$ 与 `chunk` 无关，而[上一节](#pad-per-chunk)那张表说明它不是：`chunk = 56`、$k = 1$ 时 $S$ 回到 32 个 word。把 pad 写成 `chunk` 的函数 —— 在 $k = 1, 2$ 里取 $\gcd(S, 32)$ 小的那个 —— 才和这一页的判据自洽。
 
-4. **这一页只在数据经过 shared memory 时适用。** 按[优化 global memory 访问](global-memory-access.md#coalescing)里怎么选的那几条，$V$ 小时用向量化的 blocked，数据直接进寄存器，不经 shared memory，没有 bank 冲突可言；$V$ 大到寄存器压力压低占用率时才改用 staged，以及整行需要被 block 内所有线程共享时，这一页才适用。
+4. **这一页只在数据经过 shared memory 时适用。** 按[优化 global memory 访问](global-memory-access.md#coalescing)里的取舍，$V$ 小时用向量化的 blocked，数据直接进寄存器，不经 shared memory，没有 bank 冲突可言；$V$ 大到寄存器压力压低占用率时才改用 staged，以及整行需要被 block 内所有线程共享时，这一页才适用。
 
 下面两段是 shared 缓冲的声明，差别只在 stride。反例，stride 恰好是 32 个 word 的倍数：
 
