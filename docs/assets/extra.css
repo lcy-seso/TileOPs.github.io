@@ -33,6 +33,23 @@
   --tf-rule: color-mix(in srgb, #16706b, transparent 40%);
   --tf-line: rgba(51, 35, 79, 0.18);
   --tf-line-soft: rgba(51, 35, 79, 0.08);
+  /* Washes for the inline SVG figures, written out rather than mixed from the
+   * palette above. An engine that does not resolve `color-mix()` drops the
+   * whole declaration, and a dropped `fill` falls back to SVG's own default,
+   * black: the roofline's tinted region paints as a black wedge over the
+   * grid. `background` degrades to nothing and can be mixed; `fill` degrades
+   * to the wrong colour, so every fill on this page is stated literally.
+   */
+  --tf-teal-wash: rgba(22, 112, 107, 0.06);
+  --tf-teal-soft: rgba(22, 112, 107, 0.08);
+  --tf-teal-tint: rgba(22, 112, 107, 0.12);
+  --tf-teal-fill: rgba(22, 112, 107, 0.18);
+  --tf-violet-wash: rgba(90, 62, 133, 0.08);
+  --tf-violet-soft: rgba(90, 62, 133, 0.12);
+  --tf-violet-tint: rgba(90, 62, 133, 0.3);
+  --tf-violet-mid: rgba(90, 62, 133, 0.4);
+  --tf-rose-fill: rgba(164, 63, 70, 0.26);
+  --tf-ink-tint: rgba(26, 23, 32, 0.22);
   /* Latin faces come first so technical terms inside Chinese prose keep the
    * site's voice; Han glyphs fall through to the platform UI face. No CJK
    * webfont: a Simplified Chinese subset costs megabytes, which is not worth
@@ -360,7 +377,7 @@ body,
 /* Inside an admonition the block would otherwise sit on the same ground twice. */
 .md-typeset .admonition pre > code,
 .md-typeset details pre > code {
-  background: color-mix(in srgb, var(--tf-teal), transparent 82%);
+  background: color-mix(in srgb, var(--tf-teal), transparent 88%);
 }
 
 /* The line numbers are scenery: no fill of their own, a hairline to sit behind,
@@ -619,9 +636,25 @@ html[lang="zh"] .md-typeset .keystone {
  * turns one row into four. The wrapper comes from
  * scripts/gen_bench_pages.py.
  */
+.md-typeset .datatable {
+  overflow-x: auto;
+}
+
+/* Width follows the content, not the page. Stretched to the full column,
+ * eight short numeric cells sit an inch apart and a row stops reading as one
+ * measurement; the padding below is what sets the distance between columns.
+ */
 .md-typeset .datatable table:not([class]) {
+  width: auto;
+  max-width: 100%;
   font-size: 0.68rem;
   font-variant-numeric: tabular-nums;
+}
+
+.md-typeset .datatable table:not([class]) th,
+.md-typeset .datatable table:not([class]) td {
+  padding-left: 0.75em;
+  padding-right: 0.75em;
 }
 
 .md-typeset .datatable table:not([class]) td,
@@ -1171,12 +1204,12 @@ html[lang="zh"] .md-nav__title {
  * source, so both schemes stay right and the .md stays readable. The boundary edge is the
  * one thick link on the page. */
 .md-typeset .mermaid g.node.traced > rect {
-  fill: color-mix(in srgb, var(--tf-violet), transparent 88%);
+  fill: var(--tf-violet-soft);
   stroke: var(--tf-violet);
 }
 
 .md-typeset .mermaid g.node.opaque > rect {
-  fill: color-mix(in srgb, var(--tf-teal), transparent 92%);
+  fill: var(--tf-teal-soft);
   stroke: var(--tf-rule);
   stroke-dasharray: 5 3;
 }
@@ -1266,6 +1299,213 @@ html[lang="zh"] .md-nav__title {
   text-align: left;
 }
 
+/* The workload key: one bullet per row of the table below it, carrying the
+ * shapes at the width of the page instead of inside a column. The table then
+ * holds only `W1`, `W2`, … and the measurements, which is what a reader
+ * compares down a column.
+ */
+/* The workload key: what an op's workloads have in common, stated once, and
+ * what varies, one line per workload. Three columns — code, what varies, the
+ * benchmark's own id — so a reader compares down a column.
+ */
+.md-typeset .wl-key {
+  margin: 0.35em 0 0.8em;
+  font-family: var(--tf-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+/* One rule per group, teal like every other label on these pages: it says how
+ * far the shared line above reaches.
+ */
+.md-typeset .wl-key .wl-group {
+  margin: 0 0 0.55em;
+  padding-left: 0.8em;
+  border-left: 2px solid color-mix(in srgb, var(--tf-teal), transparent 55%);
+}
+
+.md-typeset .wl-key .wl-group:last-child {
+  margin-bottom: 0;
+}
+
+/* A row of entries, not a sentence: each cell holds together and the line
+ * wraps between them, so a long op's second line starts under the first
+ * instead of breaking a shape in half.
+ */
+.md-typeset .wl-key .wl-shared {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15em 0.32em;
+  margin: 0 0 0.15em;
+  font-size: inherit;
+  line-height: inherit;
+  color: color-mix(in srgb, var(--tf-ink), transparent 20%);
+}
+
+.md-typeset .wl-key .wl-shared + .wl-shared {
+  margin-bottom: 0.2em;
+}
+
+.md-typeset .wl-key .wl-cell {
+  white-space: nowrap;
+}
+
+/* Between entries, a middot rather than a second rule: the rule after the code
+ * falls in the same place on every row and reads as a column, while a rule
+ * between entries would land wherever the previous name happened to end. A
+ * middot is punctuation — it separates without claiming to align anything.
+ */
+.md-typeset .wl-key .wl-cell + .wl-cell::before {
+  content: "·";
+  margin-right: 0.32em;
+  color: color-mix(in srgb, var(--tf-ink), transparent 50%);
+  font-weight: 400;
+}
+
+/* Two kinds of thing on these lines, and they are read differently: a tensor
+ * is a shape the op takes, a scalar is a number it was given. The tensor's
+ * name carries the weight; the scalars stay plain text beside it.
+ */
+.md-typeset .wl-key .wl-tensor .wl-k {
+  color: color-mix(in srgb, var(--tf-teal), var(--tf-ink) 30%);
+  font-weight: 700;
+}
+
+.md-typeset .wl-key .wl-scalar {
+  color: var(--tf-muted);
+}
+
+/* The number is what varies down the page; its name is the same every row. */
+.md-typeset .wl-key .wl-scalar .wl-v {
+  color: color-mix(in srgb, var(--tf-ink), transparent 15%);
+}
+
+.md-typeset .wl-key .wl-dim .wl-v {
+  color: inherit;
+}
+
+/* Narrow windows have no width to hold a tensor list on one line; there,
+ * breaking inside a cell beats a line running off the page.
+ */
+@media (max-width: 50rem) {
+  .md-typeset .wl-key .wl-cell {
+    white-space: normal;
+  }
+}
+
+.md-typeset .wl-key ul.wl-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The id ranges right, off the same edge on every row, so the middle column is
+ * free to be as long as one workload needs without ragging the rest.
+ */
+.md-typeset .wl-key ul.wl-rows li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 0.9em;
+  margin: 0;
+}
+
+.md-typeset .wl-key ul.wl-rows b {
+  flex: 0 0 2.1em;
+  color: var(--tf-violet);
+  font-weight: 700;
+}
+
+/* A hairline between the code and what it ran on — the same rule the table
+ * draws between the workload column and its measurements, so the two read as
+ * the same division seen twice.
+ */
+.md-typeset .wl-key .wl-delta {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.15em 0.32em;
+  padding-left: 0.9em;
+  border-left: 1px solid color-mix(in srgb, var(--tf-ink), transparent 80%);
+}
+
+.md-typeset .wl-key .wl-delta:empty {
+  border-left: 0;
+}
+
+/* A tensor list wider than the column: one tensor per line, and no middots —
+ * stacked entries are already separated by the line break.
+ */
+.md-typeset .wl-key .wl-shared.wl-stack {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+}
+
+.md-typeset .wl-key .wl-shared.wl-stack .wl-cell + .wl-cell::before {
+  content: none;
+  margin-right: 0;
+}
+
+/* A row whose own scalars are wider than the column: the id takes the first
+ * line beside the code, the scalars the second. The rule runs down both, so a
+ * workload set this way is still one object with one left edge.
+ */
+.md-typeset .wl-key ul.wl-long li {
+  margin-bottom: 0.3em;
+}
+
+.md-typeset .wl-key ul.wl-long li:last-child {
+  margin-bottom: 0;
+}
+
+.md-typeset .wl-key ul.wl-long .wl-id {
+  order: 1;
+  flex: 1 1 auto;
+  margin-left: 0;
+  padding-left: 0.9em;
+  border-left: 1px solid color-mix(in srgb, var(--tf-ink), transparent 80%);
+}
+
+.md-typeset .wl-key ul.wl-long .wl-delta {
+  order: 2;
+  flex: 0 0 calc(100% - 3em);
+  margin-left: 3em;
+}
+
+.md-typeset .wl-key .wl-id {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0;
+  background: transparent;
+  color: var(--tf-muted);
+}
+
+/* A tensor's name is not its shape, and a symbol is not its value. Teal
+ * separates the two the way it separates the workload column from the
+ * measurements — the same colour, learned once.
+ */
+.md-typeset .wl-key .wl-k {
+  color: color-mix(in srgb, var(--tf-teal), var(--tf-muted) 32%);
+}
+
+/* Parameters are how the op was called, not how big it is. */
+.md-typeset .wl-key .wl-dt,
+.md-typeset .wl-key .wl-dim,
+.md-typeset .wl-key .wl-dim .wl-k {
+  color: var(--tf-muted);
+}
+
+/* The workload column is now two characters wide, so it centres like the
+ * numbers rather than ranging left as a label did.
+ */
+.md-typeset .datatable table:not([class]) td.colsep b {
+  color: var(--tf-violet);
+  font-weight: 700;
+}
+
+
+
 /* Roofline figure (performance-guides/memory-bound).  Log-log, so the
    two decades between an elementwise kernel and the ridge stay legible.  Colours
    come from the shared palette: teal for the roof itself, violet for the ridge,
@@ -1296,7 +1536,7 @@ html[lang="zh"] .md-nav__title {
 }
 
 .md-typeset .tf-roofline .tf-rl-region {
-  fill: color-mix(in srgb, var(--tf-teal), transparent 94%);
+  fill: var(--tf-teal-wash);
 }
 
 .md-typeset .tf-roofline .tf-rl-grid {
@@ -1317,7 +1557,7 @@ html[lang="zh"] .md-nav__title {
 }
 
 .md-typeset .tf-roofline .tf-rl-drop {
-  stroke: color-mix(in srgb, var(--tf-violet), transparent 60%);
+  stroke: var(--tf-violet-mid);
   stroke-dasharray: 3 4;
   stroke-width: 1.5;
 }
@@ -1413,13 +1653,13 @@ html[lang="zh"] .md-nav__title {
 }
 
 .md-typeset .tf-access .ap-sector--fetched {
-  fill: color-mix(in srgb, var(--tf-teal), transparent 88%);
+  fill: var(--tf-teal-tint);
 }
 
 /* shared memory: no sectors, so the row is drawn as one undivided surface */
 .md-typeset .tf-access .ap-sector--onchip {
-  fill: color-mix(in srgb, var(--tf-violet), transparent 92%);
-  stroke: color-mix(in srgb, var(--tf-violet), transparent 70%);
+  fill: var(--tf-violet-wash);
+  stroke: var(--tf-violet-tint);
   stroke-dasharray: 3 3;
 }
 
@@ -1480,7 +1720,7 @@ html[lang="zh"] .md-nav__title {
    so it does not compete with the teal (fetched sector) and violet (element the
    instruction reads) that carry the argument. */
 .md-typeset .tf-access .ap-cell--t1 {
-  fill: color-mix(in srgb, var(--tf-ink), transparent 78%);
+  fill: var(--tf-ink-tint);
 }
 
 /* t0…t7 above each thread's span. The alternating tone shows where the
@@ -1514,11 +1754,11 @@ html[lang="zh"] .md-nav__title {
 }
 
 .md-typeset .tf-bank .bk-cell--one {
-  fill: color-mix(in srgb, var(--tf-teal), transparent 82%);
+  fill: var(--tf-teal-fill);
 }
 
 .md-typeset .tf-bank .bk-cell--many {
-  fill: color-mix(in srgb, var(--tf-rose), transparent 74%);
+  fill: var(--tf-rose-fill);
 }
 
 .md-typeset .tf-bank .bk-count {
