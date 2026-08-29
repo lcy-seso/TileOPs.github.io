@@ -9,8 +9,7 @@ LLM operators across backends, built on TileLang. MkDocs + Material, deployed to
 ## Development
 
 ```bash
-pip install mkdocs-material "mkdocstrings[python]" mkdocs-include-markdown-plugin \
-  mkdocs-static-i18n jieba pyyaml black
+pip install -r requirements-docs.txt -r requirements-dev.txt
 git clone --depth 1 https://github.com/tile-ai/TileOPs.git TileOPs   # or symlink one
 mkdocs serve
 ```
@@ -21,6 +20,24 @@ and `design/` mirrors its `docs/design/`. Without it, mkdocstrings cannot import
 
 `mkdocs serve` serves under the `site_url` subpath, so the page is at
 `/TileOPs.github.io/`. `bash scripts/render_bench.sh` renders `docs/benchmarks/`.
+
+## Checks
+
+`.github/workflows/checks.yml` runs these on every push and pull request:
+
+| Command | Holds |
+|---------|-------|
+| `pytest` | The renderer, including `tests/golden/` — the pages a fixed snapshot must produce, byte for byte |
+| `ruff check scripts hooks.py tests` | `pyproject.toml`; `E501` off, the prose here is wrapped by hand |
+| `npx stylelint "docs/assets/**/*.css"` | No duplicate selector, no `color-mix()` — an engine that cannot parse a function drops the whole declaration, so a border vanishes and an SVG `fill` paints black |
+| `mkdocs build` | Fails on any warning of ours; griffe's are TileOPs' docstrings, not this repo's gate |
+
+Seven tests, and that is the intended size. `tests/fixtures/` is a trimmed
+snapshot — one testcase per path the renderer takes — and `tests/golden/` the
+three data pages it must produce. A change to what those pages say fails by
+design: read the diff, then `python tests/refresh_golden.py`. A unit test is
+added only for a rule the pages do not show; anything the golden pages already
+cover is not worth a second assertion on a docs site.
 
 ## Generated pages
 

@@ -128,8 +128,18 @@ _KEYWORD_FAMILY = [
     (("reduce", "argmax", "argmin", "argreduce", "mean", "sum", "max", "min"),
      "reduction"),
 ]
+# The package an op is defined in decides its family, and the keywords below
+# only speak for ops the layout does not place: an op defined in a module rather
+# than a package (`rope.py`, `pool.py`, `fft.py`), and the mixed
+# `sequence_modeling` package, whose ops belong to no one family. Every package
+# that does map to a family belongs here — `linear_attention` left out of it
+# fell through to the keyword `linear` and published linear-attention ops on the
+# GEMM page.
 _MODULE_FAMILY = {"attention": "attention", "elementwise": "elementwise",
-                  "reduction": "reduction", "norm": "normalization", "moe": "moe"}
+                  "reduction": "reduction", "norm": "normalization",
+                  "moe": "moe", "gemm": "linear_algebra",
+                  "linear_attention": "linear_attention",
+                  "mamba": "linear_attention"}
 
 
 def family_of(op: str, op_module: str | None) -> str:
@@ -267,15 +277,20 @@ def parse_test_xml(path: str) -> dict[str, dict]:
 # empty marker.
 
 
-def load_sol_engine(gpu: str):
-    """(nightly_report module, GPU profile) or (None, None) with a warning."""
+def load_sol_engine(gpu: str, tileops: str = TILEOPS):
+    """(nightly_report module, GPU profile) or (None, None) with a warning.
+
+    `tileops` is the checkout the roofline tool is imported from, so a caller
+    that has none — a test, a build without the checkout — gets the same
+    degraded column the deploy would get, rather than a different one.
+    """
     try:
-        sys.path.insert(0, os.path.join(TILEOPS, "src"))
+        sys.path.insert(0, os.path.join(tileops, "src"))
         import importlib.util
 
         spec = importlib.util.spec_from_file_location(
             "tileops_nightly_report",
-            os.path.join(TILEOPS, "scripts", "nightly_report.py"))
+            os.path.join(tileops, "scripts", "nightly_report.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         from tileops.perf.profile import find_profile
@@ -598,7 +613,7 @@ def _stack(cells: list[str]) -> str:
 WORKLOAD_CODE = "W"
 
 
-def _facts(spec) -> "OrderedDict":
+def _facts(spec) -> OrderedDict:
     """Every scalar a workload sets, as name -> (value, kind).
 
     The symbols of the tensor templates come first, since those are the numbers
@@ -711,10 +726,15 @@ def workload_key(rows: list) -> list:
     for group in _cluster(rows):
         specs = [w.get("spec") for _, w in group]
         if not specs[0]:
-            for code, w in group:
-                blocks.append(f'<li><b>{code}</b><span class="wl-delta">'
-                              f'</span><code class="wl-id">'
-                              f'{html.escape(w["config"])}</code></li>')
+            # No manifest entry: the id is all there is to say. Still a group
+            # and still a list, so the code column lines up with every other
+            # op's and the styling is the one thing that does not vary.
+            bare = "".join(
+                f'<li><b>{code}</b><span class="wl-delta"></span>'
+                f'<code class="wl-id">{html.escape(w["config"])}</code></li>'
+                for code, w in group)
+            blocks.append('<div class="wl-group"><ul class="wl-rows">'
+                          + bare + "</ul></div>")
             continue
         facts = [_facts(s) for s in specs]
         # A symbolic template describes the whole group only where every
@@ -729,7 +749,7 @@ def workload_key(rows: list) -> list:
         scalars = [_fact_html(n, *facts[0][n]) for n in shared]
 
         rows_html, deltas = [], []
-        for (code, _), spec, fact in zip(group, specs, facts):
+        for (code, _), spec, fact in zip(group, specs, facts, strict=True):
             varies = [_fact_html(n, *v) for n, v in fact.items()
                       if n not in shared]
             # Without a template the group has nothing to hold in common, so
@@ -775,7 +795,7 @@ def detail_row(code: str, m: dict) -> str:
                       rated=bool(real))
     return (
         "<tr>"
-        f'<td class="colsep"><b>{code}</b></td>' 
+        f'<td class="colsep"><b>{code}</b></td>'
         f"<td>{gap}</td>"
         f"<td>{_sig_ms(m['busy_ms'])}</td>"
         f"<td>{names}</td>"
@@ -1082,7 +1102,7 @@ def data_page(title: str, fams: list[str], rows_by_fam: dict,
             note = f"{s['workloads']} workloads"
             if tmark != EMPTY:
                 note += f" · {tmark}"
-            ordered = sorted(zip(workloads_of[op], metrics_by_op[op]),
+            ordered = sorted(zip(workloads_of[op], metrics_by_op[op], strict=True),
                              key=lambda z: z[0]["config"])
             coded = [(f"{WORKLOAD_CODE}{i}", w)
                      for i, (w, _) in enumerate(ordered, 1)]
@@ -1091,7 +1111,7 @@ def data_page(title: str, fams: list[str], rows_by_fam: dict,
                       # No `markdown="1"`, and no blank line until `</div>`: a
                       # blank line would end the raw-HTML block mid-table.
                       '<div class="datatable">', *DETAIL_HEADER]
-            for (code, _), (_, m) in zip(coded, ordered):
+            for (code, _), (_, m) in zip(coded, ordered, strict=True):
                 lines.append(detail_row(code, m))
             lines += [*DETAIL_FOOTER, "</div>", ""]
     return "\n".join(lines) + "\n"
@@ -1112,7 +1132,7 @@ def collect_ratio_drift(workloads: list[dict], metrics: list[dict]) -> list[tupl
     page last went wrong.
     """
     drift = []
-    for w, m in zip(workloads, metrics):
+    for w, m in zip(workloads, metrics, strict=True):
         for tag, r in m["rivals"].items():
             rec, comp = r["recorded_ratio"], r["computed_ratio"]
             if rec and comp and abs(rec - comp) / rec > RATIO_DRIFT:
@@ -1130,6 +1150,9 @@ def main():
     ap.add_argument("--gpu", default="unknown")
     ap.add_argument("--rendered", default=None)
     ap.add_argument("--out-dir", default=None)
+    ap.add_argument("--tileops", default=TILEOPS,
+                    help="TileOPs checkout the roofline tool is imported from "
+                         "(default: ./TileOPs)")
     ap.add_argument("--manifest-dir", default=MANIFEST_DIR,
                     help="TileOPs spec manifest the workload shapes are read "
                          "from (default: the checkout at ./TileOPs)")
@@ -1152,7 +1175,7 @@ def main():
                       for w in workloads).most_common(1)
     timing = timings[0][0] if timings else None
 
-    sol_engine = load_sol_engine(args.gpu)
+    sol_engine = load_sol_engine(args.gpu, args.tileops)
 
     # The snapshot names a workload but does not carry its shapes; the spec
     # manifest declares both, under the same label. Ops it does not declare
