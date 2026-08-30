@@ -3,26 +3,20 @@
 # regenerate docs/benchmarks/index.md.
 #
 # index.md is a build artifact, not source: the committed file is a placeholder.
-# Both deploy.yml (push) and render-benchmarks.yml (schedule) call this before
-# `mkdocs gh-deploy`, so every deploy serves fresh data.
+# Both deploy.yml and render-benchmarks.yml call this before `mkdocs gh-deploy`.
 #
-# Failure policy (gh-deploy --force republishes the whole site, so a bad render
-# must not overwrite the live page):
-#   * no snapshot published yet    -> keep the placeholder and succeed
-#     (first-deploy bootstrap).
-#   * published but fetch fails    -> transient 404/network error; exit
-#     non-zero so the deploy aborts and the live page is left intact.
+# `gh-deploy --force` republishes the whole site, so a bad render must not
+# overwrite the live page: nothing published yet keeps the placeholder and
+# succeeds, anything else aborts the deploy.
 #
-# Requires python3 on PATH (3.9 is enough; CI pins 3.12) and pyyaml. A ./TileOPs
-# checkout supplies the spec manifest the workload shapes are read from, and
-# resolves an op's source link to its file instead of a code search. Without it
-# the pages still render, with each workload named only by its benchmark id.
+# Needs python3 and pyyaml. A ./TileOPs checkout supplies the spec manifest the
+# shapes are read from; without it each workload is named by its benchmark id.
 set -euo pipefail
 
-# The nightly writes one commit per run here; the newest is what this renders,
-# and `git log` on that repository is where an older one is read back from.
+# One commit per run on `snapshots`; the newest is what this renders, and
+# `git log snapshots` is where an older one is read back from.
 snapshots="https://github.com/tile-ai/TileOPs-nightly"
-base="https://raw.githubusercontent.com/tile-ai/TileOPs-nightly/main"
+base="https://raw.githubusercontent.com/tile-ai/TileOPs-nightly/snapshots"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
@@ -31,10 +25,8 @@ fetch() {  # fetch <name> <dest>; prints the HTTP status, 000 if it never got on
     -o "$2" -w '%{http_code}' "$base/$1" 2>/dev/null || echo 000
 }
 
-# 404 is the bootstrap case — the nightly has not published yet — and is the
-# one status that may keep the placeholder and succeed. Anything else is a
-# transport error or a half-published snapshot, and must not overwrite the
-# live page with a placeholder.
+# 404 means nothing has been published yet, and is the one status that may keep
+# the placeholder and succeed.
 code="$(fetch bench_results.xml "$work/bench_results.xml")"
 if [ "$code" = "404" ]; then
   echo "::warning::${snapshots} has published no snapshot yet; keeping placeholder benchmark page"
