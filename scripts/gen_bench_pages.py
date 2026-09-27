@@ -174,6 +174,9 @@ _KEYWORD_FAMILY = [
     (("grouped_gemm", "gemm", "matmul", "linear"), "linear_algebra"),
     (("moe", "expert"), "moe"),
     (("conv",), "convolution"), (("pool",), "pool"), (("fft",), "fft"),
+    # Ahead of `fp8`: the FP8 lightning indexer is published on the attention
+    # API page, a module of its own rather than in the `attention` package.
+    (("lightning_indexer",), "attention"),
     (("quant", "fp8"), "quantization"),
     (("rope", "rotary", "positional"), "positional"),
     (("mhc",), "mhc"), (("topk", "top_k"), "topk"),
@@ -1081,7 +1084,7 @@ def reading_page(sol_engine=(None, None)) -> str:
         "## Where the shapes come from", "",
         "The snapshot records what each workload measured, not what it ran on: "
         "the shapes are read from the TileOPs [spec manifest]"
-        f"({_GH}/tree/main/src/tileops/manifest), joined to a row by the label "
+        f"({_GH}/tree/main/src/tileops/manifest/spec), joined to a row by the label "
         "and dtype the benchmark id is built from. A workload the manifest does "
         "not declare — a benchmark written by hand rather than driven by a spec "
         "— shows that id alone, with no shapes under it.",
@@ -1219,12 +1222,16 @@ def main():
     # The snapshot names a workload but does not carry its shapes; the spec
     # manifest declares both, under the same label. Ops it does not declare
     # keep the benchmark's own id — see `workload_cell`.
-    manifest = (workload_shape.load_manifest(args.manifest_dir)
-                if os.path.isdir(args.manifest_dir) else {})
+    has_manifest = os.path.isdir(args.manifest_dir)
+    manifest = workload_shape.load_manifest(args.manifest_dir) if has_manifest else {}
+    parametric = workload_shape.Parametric(
+        args.tileops,
+        workload_shape.load_adts(args.manifest_dir) if has_manifest else {})
     undeclared = set()
     for w in workloads:
         entry = manifest.get(w["op"])
-        w["spec"] = workload_shape.describe(entry, w["config"]) if entry else None
+        w["spec"] = (workload_shape.describe(entry, w["config"], w["op"], parametric)
+                     if entry else None)
         if not w["spec"]:
             undeclared.add(w["op"])
 
