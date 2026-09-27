@@ -68,8 +68,10 @@ compiled path behave differently from the eager one.
 - **Warm up before a CUDA-graph capture.** Call once with real tensors at the same
   shape: building a kernel may compile, while capture allows only a memo hit and the call
   that follows it. See [what each phase may do](backends.md#phase-limits).
-- **Every device builds its own kernel.** The device is part of the kernel memo key, so
-  the same instance builds again on a second card. A `target=` named in the constructor
+- **A second card may need its own build.** For a call a target serves, the device is
+  part of the kernel's memo key, so the same instance builds again on a second card. An
+  in-tree kernel is keyed by what its `entry_for` returns, which includes the device only
+  when the build depends on it. A `target=` named in the constructor
   is honoured on the first compiled call too, and a failed build pins the op to no
   target.
 
@@ -116,8 +118,9 @@ entry, one operator per effect branch: its tensor arguments are `signature.input
 order, what it returns is `signature.outputs`, the arguments it writes are exactly the
 inputs marked `mutated`, and each output's shape and dtype come from the signature. Its
 name is `tileops::<family>_<snake(class)>`, with the family written once where the class
-name already opens with it — here `tileops::norm_rms_norm_fwd`; where the entry declares
-a written input or `buffer: out`, that branch's operator adds `_writes_<input>` or `_out`.
+name already opens with it — here `tileops::norm_rms_norm_fwd`; when a branch writes
+an input, fills a `buffer: out` or omits an output, its operator's name gains
+`_writes_<input>`, `_out` and `_without_<output>` respectively, in that order.
 No op chooses its own name, so `compile_op_names` cannot disagree with what was
 registered.
 
