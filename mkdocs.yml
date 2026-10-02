@@ -31,6 +31,7 @@ nav:
   - Home: index.md
   - Blog:
     - blog/index.md
+    - TileOPs × TileFoundry: blog/tilefoundry-x-tileops.md
   - User Guide:
     # In the order the index groups them: getting started, specs and ops,
     # kernels and hardware, integration and performance.
@@ -170,6 +171,7 @@ plugins:
           nav_translations:
             Home: 首页
             Blog: 博客
+            TileOPs × TileFoundry: TileOPs × TileFoundry
             Design: 设计文档
             User Guide: 用户指南
             Development Guide: 开发指南
