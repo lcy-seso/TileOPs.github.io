@@ -25,7 +25,7 @@ gemm(trans_a, trans_b : Bool) : ∀ (M N K : Dim) (T : DType[float16 | bfloat16]
 | 2 | 函数类型 | 从输入张量的类型到输出张量的类型 | `inputs`、`outputs` |
 | 3 | quantification | `∀` 列出所有 type index 及其 kind | `forall` |
 
-对 type index 做了 quantification 的函数类型称为 polymorphic function type。运行时检查与 `eval_roofline()` 都从签名生成；声明了 compile boundary 的 op，其 `torch.library` operator 与 fake/meta 函数也从签名生成。validator 以签名为对象做静态检查。
+对 type index 做了 quantification 的函数类型称为 polymorphic function type。运行时检查与 `eval_roofline()` 都从签名生成；有编译边界的 op，其 `torch.library` operator 与 fake/meta 函数也从签名生成。validator 以签名为对象做静态检查。
 
 ## 2. type index 与 kind {#index}
 
@@ -129,7 +129,7 @@ inputs:  {input: {dtype: T, shape: "[*S]", mutated: inplace}}
 outputs: {output: {dtype: T, shape: "[*S]", alias: input}}
 ```
 
-effect 决定了 roofline 的读写计数，以及声明了 compile boundary 的 op 所生成的 operator schema（其中的 `mutates_args`）。所有 effect 声明见[扩展写法 6](extensions.md#effects)。
+effect 决定了 roofline 的读写计数，以及有编译边界的 op 所生成的 operator schema（其中的 `mutates_args`）。所有 effect 声明见[扩展写法 6](extensions.md#effects)。
 
 ## 9. 术语表 {#glossary}
 

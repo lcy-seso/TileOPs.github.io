@@ -83,7 +83,7 @@ The call device is determined as shown below. At workload instantiation, tensors
 Under `torch.compile`, the generated checks are evaluated on SymInt, and each discriminant is already a concrete Python value at that point.
 
 - An expression that needs to convert a SymBool to a Python boolean is evaluated only at construction.
-- An op class can declare a compile boundary, meaning it supports `fullgraph=True`. For such a class, the validator requires every expression to be evaluable on SymInt.
+- An op class whose spec has a call-time tensor input and no `composition` gets a compile boundary automatically when the class is defined, and must pass a cold `fullgraph=True` compile, so every expression of its spec must be evaluable on SymInt.
 - Expression strings are parsed and checked before code generation, and the generated code does not parse strings at run time.
 
 The conventions a caller follows under `torch.compile` are in [Bringing an op into torch.compile](../../torch-compile.md).
@@ -108,11 +108,10 @@ On each value combination, the validator checks the following:
 4. Dependencies between `let` entries have no cycle.
 5. Every expression belongs to the expression language, and every primitive used is built in.
 6. On every workload row, the generator results unify with their declarations and every `requires` holds.
-7. For a class that declares a compile boundary, every expression can be evaluated on SymInt.
-8. Every workload row can be instantiated.
-9. On each effect branch, the operator schema, the aliasing and the roofline read and write counts agree.
+7. Every workload row can be instantiated.
+8. On each effect branch, the operator schema, the aliasing and the roofline read and write counts agree.
 
-For an `implemented` op, the validator also checks that the code agrees with the spec, including `__init__` against `params`, `forward` against the call-time inputs, and composition against the class's `delegate_types` and `kernel_types`. `spec-only` ops skip these code-dependent checks.
+For an `implemented` op, the validator also checks that the code agrees with the spec, including `__init__` against `params`, `forward` against the call-time inputs, composition against the class's `delegate_types` and `kernel_types`, and that the class names compile-boundary operators in `compile_op_names` exactly when its spec calls for a compile boundary. `spec-only` ops skip these code-dependent checks.
 
 - CI runs the validator on the whole manifest.
 - The validator parses a spec field by field. When a field cannot be parsed, the validator reports that field and skips only the checks that depend on it; the other checks run as usual.
