@@ -83,7 +83,7 @@ op 在 `interfaces` 中声明它调用 kernel 的位置，每个位置对应一�
 在 `torch.compile` 下，生成的检查在 SymInt 上求值，此时各 discriminant 已经是确定的 Python 值。
 
 - 需要把 SymBool 转为 Python 布尔值的表达式，只在构造时求值。
-- op 类可以声明 compile boundary，表示它支持 `fullgraph=True`。对这样的类，validator 要求其所有表达式都能在 SymInt 上求值。
+- spec 有调用期张量输入、且没有 `composition` 的 op 类在类定义时自动生成编译边界，必须通过冷启动的 `fullgraph=True` 编译，因此其所有表达式都必须能在 SymInt 上求值。
 - 表达式字符串在代码生成之前完成解析与检查，生成的代码在运行时不再解析字符串。
 
 调用方在 `torch.compile` 下需要遵守的约定见[接入 torch.compile](../../torch-compile.md)。
@@ -108,11 +108,10 @@ op 在 `interfaces` 中声明它调用 kernel 的位置，每个位置对应一�
 4. `let` 之间的依赖无环。
 5. 每个表达式都属于表达式语言，用到的 primitive 都是内建的。
 6. 在每条 workload 行上，generator 的结果都能与声明做 unification，`requires` 都成立。
-7. 对于声明了 compile boundary 的类，其所有表达式都能在 SymInt 上求值。
-8. 每条 workload 行都能实例化。
-9. 在每个 effect 分支上，operator schema、别名关系与 roofline 的读写计数一致。
+7. 每条 workload 行都能实例化。
+8. 在每个 effect 分支上，operator schema、别名关系与 roofline 的读写计数一致。
 
-对于 `implemented` 的 op，validator 还检查代码与 spec 是否一致，包括 `__init__` 与 `params`、`forward` 与调用期输入，以及 composition 与类的 `delegate_types`、`kernel_types`。`spec-only` 的 op 跳过这些依赖代码的检查。
+对于 `implemented` 的 op，validator 还检查代码与 spec 是否一致，包括 `__init__` 与 `params`、`forward` 与调用期输入，composition 与类的 `delegate_types`、`kernel_types`，以及类在 `compile_op_names` 中列出编译边界算子当且仅当 spec 要求编译边界。`spec-only` 的 op 跳过这些依赖代码的检查。
 
 - CI 对整份 manifest 运行 validator。
 - validator 逐字段解析 spec。某个字段无法解析时，validator 报告这个字段，并只跳过依赖该字段的检查，其余检查照常进行。

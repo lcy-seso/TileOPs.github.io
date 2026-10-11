@@ -132,7 +132,7 @@ primitive 是表达式中可以调用的内建函数，例如 `broadcast`、`red
 
 ## 6. 对参数的写入：effect {#effects}
 
-没有 effect 声明的 op 只读取输入，并为输出分配新的张量。如果 op 会写入参数，需要在签名的相应张量上声明 effect。effect 决定了 roofline 的读写计数，以及声明了 compile boundary 的 op 所生成的 operator schema。
+没有 effect 声明的 op 只读取输入，并为输出分配新的张量。如果 op 会写入参数，需要在签名的相应张量上声明 effect。effect 决定了 roofline 的读写计数，以及有编译边界的 op 所生成的 operator schema。
 
 **表 1** effect 声明
 
