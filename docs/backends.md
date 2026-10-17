@@ -329,7 +329,7 @@ This call path implies four things:
   and the keyword arguments are the manifest's `params` names with the values settled for
   this call.
 - **One builder per `(op, target)`.** The backend is not told which kernel the in-tree
-  path would run (GEMM declares three in `kernel_types`); `build_kernel` decides from the
+  path would run (GEMM, for one, declares several in `kernel_types`); `build_kernel` decides from the
   `TensorSpec`s which kernel to return.
 - **The backend needs no memoisation of its own.** For the same device and input signature
   the op layer does not call `build_kernel` again. For a finer split, or fewer rebuilds,
@@ -437,6 +437,7 @@ Each file in the example covers one part of the backend author's work:
 | `tests/test_discovery.py` | entry point and registration |
 | `tests/test_errors.py` | the three error paths: an unregistered op raises rather than falling back, an unknown target raises, and a failed call binds the op to no target |
 | `tests/test_memoization.py` | when `build_kernel` is called again |
+| `tests/test_tuning.py` | a tuning request reaching the kernels built before and after it, and `op.kernel_config()` reporting a kernel's `config` |
 
 `CpuRMSNorm` does not receive the row count when it is constructed. This is the rule
 "the constructor takes compile-time parameters only" in practice.
@@ -447,14 +448,15 @@ The example's tests need an environment with `tileops` installed:
 
 ```bash
 pip install -e .          # add --no-deps when tileops is already installed
-python -m pytest -q       # 24 passed, both with two H200s visible and with CUDA_VISIBLE_DEVICES=""
+python -m pytest -q       # all pass, none skipped, with a GPU visible and with none
 ```
 
-The tests also run inside the TileOPs dev image, again without modifying TileOPs:
+The tests also run inside the TileOPs [dev image](user-guide/development.md#docker), again
+without modifying TileOPs; `<tag>` is a published tag, in the form that page describes:
 
 ```bash
 docker run --rm --gpus all -v "$PWD/..":/work -w /work \
-  ghcr.io/tile-ai/tileops-dev:cuda13.2-torch2.13-tilelang0.1.12 \
+  ghcr.io/tile-ai/tileops-dev:<tag> \
   bash -lc 'pip install -e /work/TileOPs --no-deps -q &&
             pip install -e /work/tileops-backend-example --no-deps -q &&
             cd /work/tileops-backend-example && python -m pytest -q'
@@ -472,7 +474,7 @@ TileOPs is too old.
 2. Change `detect` in `target.py` to claim the corresponding device type.
 3. Replace the kernels in the `ops/` modules with real ones, which compile on construction and launch on `__call__`.
 4. Pick the first op to take over, write its `build_kernel` against the op's manifest signature, and add it to `BUILDERS`.
-5. The four files under [`tests/`](https://github.com/lcy-seso/tileops-backend-example/tree/main/tests) carry over largely as they are; substitute the op and target names.
+5. The tests under [`tests/`](https://github.com/lcy-seso/tileops-backend-example/tree/master/tests) carry over with three changes: the package, target, op and kernel class names; the device the tests create tensors on and the device type they assert (CPU in the example); and the assertions specific to an op or kernel.
 6. Add a `build_kernel` per op from there, until every op the target model uses is covered.
 
 ## Writing a kernel
@@ -731,13 +733,13 @@ pytest tests/ops --tileops-target=<t> --tileops-device=<d> --junitxml=<report>
 ```
 
 `<t>` is the backend target that serves device `<d>`. `tests/ops` does not support `cpu`
-with `builtin`. Three markers decide which tests run:
+with `builtin`. Three kinds of marker decide which tests run:
 
 | Marker | Meaning | In a backend's run |
 | --- | --- | --- |
 | `in_tree_kernels` | The test depends on the in-tree implementations | dropped when `--tileops-target` is not `builtin` |
 | `cuda_only` | The test itself needs CUDA | dropped when `--tileops-device` is not `cuda` |
-| `sm80` / `sm86` / `sm89` / `sm90` | The test needs that CUDA architecture | skipped on another device, and counted as a skip |
+| `sm<NN>`, such as `sm90` | The test needs that CUDA architecture | skipped on another device, and counted as a skip |
 
 In the JUnit report, each test that called `check()` carries an `op` and a
 `checked_outputs` property.
