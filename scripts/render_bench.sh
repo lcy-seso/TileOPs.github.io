@@ -50,7 +50,9 @@ read_meta() {  # read_meta <key>; missing key -> "unknown"
 bench_commit="$(read_meta commit)"
 bench_date="$(read_meta date)"
 bench_gpu="$(read_meta gpu)"
-rendered="$(date -u +'%Y-%m-%d %H:%M UTC')"
+# Beijing time first, UTC in brackets, both from one clock reading.
+now="$(date +%s)"
+rendered="$(TZ=CST-8 date -d "@$now" +'%Y-%m-%d %H:%M') Beijing time ($(date -u -d "@$now" +'%Y-%m-%d %H:%M') UTC)"
 
 test_arg=()
 [ -f "$work/test_results.xml" ] && test_arg=(--test-xml "$work/test_results.xml")

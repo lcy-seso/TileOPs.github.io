@@ -280,11 +280,11 @@ body,
   line-height: 1.65;
 }
 
-/* Selection in the accent, weak enough that the ink stays the darkest thing on
- * the page.
+/* Selection in the accent, strong enough to read against the tinted table
+ * cells, light enough that the ink stays legible on it.
  */
 ::selection {
-  background: rgba(124, 92, 174, 0.22);
+  background: rgba(124, 92, 174, 0.42);
 }
 
 /* Headings carry a violet rule whose weight tracks the level. Only h1 takes the
