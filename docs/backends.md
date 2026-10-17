@@ -85,6 +85,7 @@ and the backend declares one entry point in `pyproject.toml`:
 | 2 | `build_kernel` | implemented by the backend | called by the op layer on a memo miss |
 | 3 | `register_detector` | the backend calls it | once, when the backend module is imported |
 | 4 | `register_kernel_builder` | the backend calls it | when the backend module is imported, once per op it takes over |
+| — | `register_device_facts` | the backend calls it, if needed | when the backend module is imported, once per device type; see [Device facts](#device-facts) |
 | — | `TensorSpec` | defined by the protocol | built by the op layer and passed into `build_kernel` |
 | — | the entry point | declared by the backend in `pyproject.toml` | enumerated by TileOPs when the first op is constructed |
 
@@ -112,7 +113,7 @@ def detect(device: torch.device) -> bool:
     return acme_runtime.is_present(device.index)
 ```
 
-### 2. `build_kernel`
+### 2. `build_kernel` {#build-kernel}
 
 ```python
 def build_kernel(*inputs: "TensorSpec | None", **params) -> Callable[..., KernelResult]: ...
@@ -131,6 +132,28 @@ def build_group_norm(x, weight, bias, *, num_groups, eps):
     return AcmeGroupNormAffine(num_groups, eps, x.dtype)
 ```
 
+The op layer calls `build_kernel` with the call's device made current through
+`torch.accelerator`. A device that is not of the process's accelerator type is left alone.
+
+The kernel `build_kernel` returns may define two optional members. They mean the same as
+the members of the same name on an in-tree `Kernel`:
+
+| Member | How the op layer uses it |
+| --- | --- |
+| `request_tune()` | Called while the op is in tuned mode. `op.request_tune()` calls it on the kernels built so far, and each kernel built later gets it before its first call. Each request calls it once on every device the kernel was built for, with that device current |
+| `config` | A non-empty dict. If the op has no non-empty config of its own, `op.kernel_config()` returns the first non-empty kernel `config` |
+
+`request_tune()` follows four rules:
+
+- It is idempotent per device: every later request calls it again, and an object shared
+  by two devices tunes once on each.
+- It may tune right away or defer to the next launch. A deferred tuning must finish in a
+  call made before any CUDA graph capture (see [What each phase may do](#phase-limits)).
+- Whatever it raises is raised by the call that triggered it, or by `op.request_tune()`.
+  A kernel whose tuning fails while it is being built is not memoised, so the next call
+  builds it again.
+- A kernel that does not define it is not tuned, and the op instance warns once.
+
 ### 3. `register_detector`
 
 ```python
@@ -148,6 +171,53 @@ def register_kernel_builder(op: str, target: str, build_kernel: BuildKernel) -> 
 
 Called by the backend, once per op it takes over. It registers the kernel builder for
 `(op, target)`; registering the same pair twice is an error.
+
+### Device facts on another device type: `register_device_facts` {#device-facts}
+
+```python
+def register_device_facts(device_type: str, read: Callable[[torch.device], DeviceFacts]) -> None: ...
+```
+
+Called by the backend, once per device type. Kernel selection reads four facts about the
+call's device: `arch`, `calibration`, `sm_count` and `smem_budget`.
+
+| Device type | Where its facts come from |
+| --- | --- |
+| `cuda` | TileOPs reads them itself |
+| Another registered type | The registered `read`, which takes the call's `torch.device` and returns `DeviceFacts` |
+| An unregistered type, such as `cpu` | Nowhere: it reports `-1 / None / 0 / 0` |
+
+- A backend registers facts when it adds implementations with `register_kernel_type` that
+  are selected by architecture, SM count or shared memory. An implementation that declares
+  `supported_archs` is never available on an unregistered device type.
+- A target that serves whole ops does not need them: its kernels make their own choices.
+- Facts belong to a device type, not to a target. If several targets serve one device
+  type, only one package registers them. Registering a type twice, or registering `cuda`,
+  raises `BackendError`.
+- Architecture numbers are only comparable within one device type, so an implementation
+  that declares `supported_archs` lists exactly one device type in `devices`.
+- If the device is of the process's accelerator type, the op layer fills in its index
+  before calling `read`. A device without an index, such as `cpu`, is passed as is.
+- `read` runs the first time a call spec's facts are read, and the result stays on that
+  call spec. It also runs when a kernel that declares `supported_archs` is constructed.
+  If reading is expensive, the backend caches inside `read`.
+- If `read` raises or returns something invalid (not a `DeviceFacts`, a field of the
+  wrong type, a negative `sm_count` or `smem_budget`), the op layer raises a
+  `BackendError` that names the `read`.
+
+```python
+import torch
+from tileops.backend import DeviceFacts, register_device_facts
+import acme_runtime                                      # a vendor runtime, imagined
+
+def read_acme(device: torch.device) -> DeviceFacts:
+    props = acme_runtime.device_properties(device.index)
+    return DeviceFacts(arch=props.arch, calibration=None,
+                       sm_count=props.compute_units,
+                       smem_budget=props.shared_memory_per_block)
+
+register_device_facts("acme", read_acme)                 # "acme" is torch's device type
+```
 
 ### `TensorSpec`
 
@@ -384,7 +454,7 @@ The tests also run inside the TileOPs dev image, again without modifying TileOPs
 
 ```bash
 docker run --rm --gpus all -v "$PWD/..":/work -w /work \
-  ghcr.io/tile-ai/tileops-runner:cu132-torch2.13-tl-afcebed1-dev \
+  ghcr.io/tile-ai/tileops-dev:cuda13.2-torch2.13-tilelang0.1.12 \
   bash -lc 'pip install -e /work/TileOPs --no-deps -q &&
             pip install -e /work/tileops-backend-example --no-deps -q &&
             cd /work/tileops-backend-example && python -m pytest -q'
@@ -477,6 +547,7 @@ The decode path is captured by a CUDA graph, so each phase has its own limits:
 | Memo lookup (its key and rebuild rules are in [When a kernel is rebuilt](#memo)) | one dict lookup | anything else |
 | `detect` | one predicate | any import, any lock |
 | Building a kernel | select an implementation, compile, allocate, re-import, build handles | tuning that depends on real tensors |
+| A kernel's `request_tune()` | compile, allocate, time | tuning that depends on the caller's real tensors |
 | Calling a kernel | launch a compiled kernel, allocate outputs through the torch allocator | compile, lazy init, build handles, host-side synchronisation |
 
 **A module-level import must not trigger compilation.** TileOPs imports the backend
@@ -492,8 +563,9 @@ A kernel call also follows two stream rules:
   protocol provides no workspace; the backend is responsible for this.
 
 Because building a kernel may compile, the caller warms up before capture, with at least
-one non-captured call at the same shape. During capture only one path is allowed: a memo
-hit, then the call.
+one non-captured call at the same shape. After `op.request_tune()` the same holds: each
+shape gets one more non-captured call before capture, in which a tuning deferred to the
+launch completes. During capture only one path is allowed: a memo hit, then the call.
 
 ## After install: three states {#three-states}
 
@@ -610,15 +682,83 @@ the order a backend author meets them:
 | # | The op layer supplies | What it means for a backend |
 | --- | --- | --- |
 | 1 | The public torch-side API and the meaning of each parameter | How the op is called, the parameter names and their semantics are settled; a backend neither defines nor changes them |
-| 2 | Manifest validation | A call whose dtype or shape does not conform is rejected at the op layer and never reaches the backend |
+| 2 | Manifest validation | A call that does not conform to the manifest signature is rejected at the op layer and never reaches the backend; who checks what inside the signature follows the table |
 | 3 | Parameters by name | Parameters arrive under the manifest's `params` names, with the values the op instance holds. For a parameter the manifest defaults to null, that is the value the op settled on, either `None` or a number |
 | 4 | Input contiguity | Every input the call does not write arrives contiguous; an input it writes arrives as the caller passed it, unless the manifest declares it `contiguous: true` |
 | 5 | Memoisation and reuse of kernels | The builder is called once per specialization: a later call with the same device and input signature reuses the previous return value. A builder may therefore compile, and the op layer guarantees it is not called again |
-| 6 | The `torch.compile` and CUDA-graph boundary | The op layer wraps a call as an opaque operator and registers a fake alongside, so the compiler can infer the output's shape and dtype without executing. **A backend's kernels do nothing for compilation**; see [Bringing an op into torch.compile](torch-compile.md) |
-| 7 | Roofline, profiling and numerical tests | The op layer's existing tests run once with the backend's kernel and compare against the manifest's `ref_api`; performance reports are produced as usual |
+| 6 | The `torch.compile` and CUDA-graph boundary | For an op with a compile boundary (its spec has a call-time tensor input and no `composition`), the op layer wraps a call as an opaque operator and registers a fake alongside, so the compiler can infer the output's shape and dtype without executing. **A backend's kernels do nothing for compilation**; see [Bringing an op into torch.compile](torch-compile.md) |
+| 7 | Roofline, profiling and numerical tests | The op layer's existing tests can run with the backend's kernel; see [A backend's test claim](#test-claim). Performance reports: see [Performance reports](#reports) |
 
-None of the seven depends on hardware, and every target gets them identically. A
-third-party backend neither bypasses any of them nor substitutes its own.
+The op layer implements all seven, and every target gets them identically on the devices
+it runs on. A third-party backend neither bypasses any of them nor substitutes its own.
+
+Item 2's checks fall in three layers:
+
+| Check | Made by | When it fails |
+| --- | --- | --- |
+| The dtypes and shapes conform to the manifest signature | the op layer | the call never reaches the backend |
+| The target serves this dtype, shape and params combination inside the signature | `build_kernel` | `build_kernel` raises |
+| A condition on tensor values, such as RoPE's out-of-range positions | the target's kernel, at call time; the op layer does not check it | the kernel must raise `ValueError`, as the in-tree implementation does; the op layer passes it to the caller unchanged |
+
+### Performance reports {#reports}
+
+`--tileops-device` sets the device a benchmark runs on. It must be CUDA or the process's
+accelerator; `cpu` is not benchmarked.
+
+| Run device | Timed with | `timing` column |
+| --- | --- | --- |
+| CUDA | CUPTI | `cupti` |
+| CUDA, when CUPTI fails and the run passes `--tileops-allow-events-fallback` | CUDA events | `cuda-events` |
+| Another accelerator | Device events (`torch.Event`) | `events` |
+
+Device events cannot separate execution from the gaps between kernels, so
+`device_busy_ms` equals `latency_ms`.
+
+When a baseline library cannot run on the run device, because it is not installed or runs
+only on CUDA:
+
+| Baseline role | On CUDA | On another device |
+| --- | --- | --- |
+| Selected | The case fails | The case is skipped, with the reason |
+| Preferred | Its column is dropped | Its column is dropped |
+
+### A backend's test claim {#test-claim}
+
+A backend runs the op layer's existing tests on its own device:
+
+```bash
+pytest tests/ops --tileops-target=<t> --tileops-device=<d> --junitxml=<report>
+```
+
+`<t>` is the backend target that serves device `<d>`. `tests/ops` does not support `cpu`
+with `builtin`. Three markers decide which tests run:
+
+| Marker | Meaning | In a backend's run |
+| --- | --- | --- |
+| `in_tree_kernels` | The test depends on the in-tree implementations | dropped when `--tileops-target` is not `builtin` |
+| `cuda_only` | The test itself needs CUDA | dropped when `--tileops-device` is not `cuda` |
+| `sm80` / `sm86` / `sm89` / `sm90` | The test needs that CUDA architecture | skipped on another device, and counted as a skip |
+
+In the JUnit report, each test that called `check()` carries an `op` and a
+`checked_outputs` property.
+
+A backend's claim about an op is that the op passes the tests that ran on that device. It
+does not cover every dtype, shape and output of the op. The claim needs all three of:
+
+| Condition | What it means |
+| --- | --- |
+| Numerical evidence | At least one test under the op passed with `checked_outputs > 0` |
+| No failure | No test under the op failed |
+| Behaviour tests | No test without an `op` property failed in the run |
+
+A claim comes with three sets of numbers:
+
+- the op's pass and skip counts, where a test with `checked_outputs == 0` counts as a skip;
+- each test's `checked_outputs`;
+- the number of tests dropped, per test file. Dropped tests never reach the JUnit report,
+  so the backend computes this number itself, as the difference in node ids between two
+  `pytest tests/ops --collect-only -q` runs: one with the default options, one with
+  `--tileops-target` and `--tileops-device`.
 
 The in-tree kernels ([`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels))
 are the **default implementation**: they have no target name and are not in the registry.
@@ -632,7 +772,7 @@ backend serves an op only when its `detect` claims the device, or when it is nam
 
 TileOPs memoises a builder's return value by **device plus input signature**:
 
-> the device this call's tensors are on, plus `(dtype, shape)` taken per input in
+> the call's device (see [Call device](user-guide/manifest/calls.md#device)), plus `(dtype, shape)` taken per input in
 > `signature.inputs` order; an optional input not passed on this call is recorded
 > as `None`.
 

@@ -1,5 +1,9 @@
 # How a benchmark is timed
 
+This page covers timing on CUDA. Another accelerator is timed with device events, where
+`device_busy_ms` equals `latency_ms`; see
+[Adding a hardware backend § Performance reports](backends.md#reports).
+
 The nightly benchmark measures one row per workload per op and reports
 `device_busy_ms`: the union of the execution intervals on the device of every kernel
 that call produces. CUPTI records each kernel's device-side start and end, and an
@@ -98,7 +102,7 @@ The five choices, and the reason for each:
 
 ## What is measured {#what-is-measured}
 
-**`device_busy_ms` is the length of the union of the execution intervals on the device
+**On CUDA, `device_busy_ms` is the length of the union of the execution intervals on the device
 of every kernel one call produces.** A CUPTI kernel record gives the device-side start
 and end of execution, excluding the host cost of issuing the call. There are three
 cases:

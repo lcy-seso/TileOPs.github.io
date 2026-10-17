@@ -25,7 +25,7 @@ The corresponding YAML is in [Examples § 1](examples.md#gemm).
 | 2 | function type | from the types of the input tensors to the types of the output tensors | `inputs`, `outputs` |
 | 3 | quantification | `∀` lists every type index and its kind | `forall` |
 
-A function type with quantification over its type indices is called a polymorphic function type. The runtime checks and `eval_roofline()` are both generated from the signature; for an op that declares a compile boundary, the `torch.library` operator and the fake/meta functions are also generated from it. The validator runs its static checks on the signature.
+A function type with quantification over its type indices is called a polymorphic function type. The runtime checks and `eval_roofline()` are both generated from the signature; for an op with a compile boundary, the `torch.library` operator and the fake/meta functions are also generated from it. The validator runs its static checks on the signature.
 
 ## 2. type index and kind {#index}
 
@@ -129,7 +129,7 @@ inputs:  {input: {dtype: T, shape: "[*S]", mutated: inplace}}
 outputs: {output: {dtype: T, shape: "[*S]", alias: input}}
 ```
 
-Effects determine the read and write counts of the roofline, and the operator schema (its `mutates_args`) generated for an op that declares a compile boundary. All effect declarations are in [Extensions § 6](extensions.md#effects).
+Effects determine the read and write counts of the roofline, and the operator schema (its `mutates_args`) generated for an op with a compile boundary. All effect declarations are in [Extensions § 6](extensions.md#effects).
 
 ## 9. Glossary {#glossary}
 

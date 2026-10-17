@@ -63,6 +63,7 @@ backend 实现 `detect` 与 `build_kernel`，再调用 `register_detector` 与 `
 | 2 | `build_kernel` | backend 实现 | op 层在记忆表未命中时调用 |
 | 3 | `register_detector` | backend 调用 | backend 模块被 import 时执行一次 |
 | 4 | `register_kernel_builder` | backend 调用 | backend 模块被 import 时执行，每个要接管的 op 调用一次 |
+| —— | `register_device_facts` | backend 调用，可选 | backend 模块被 import 时执行，每种设备类型一次，见[设备事实](#device-facts) |
 | —— | `TensorSpec` | 协议定义 | op 层构造，作为 `build_kernel` 的实参传入 |
 | —— | entry point | backend 在 `pyproject.toml` 中声明 | TileOPs 在构造第一个 op 时枚举 |
 
@@ -88,7 +89,7 @@ def detect(device: torch.device) -> bool:
     return acme_runtime.is_present(device.index)
 ```
 
-### 2. `build_kernel`
+### 2. `build_kernel` {#build-kernel}
 
 ```python
 def build_kernel(*inputs: "TensorSpec | None", **params) -> Callable[..., KernelResult]: ...
@@ -103,6 +104,22 @@ def build_group_norm(x, weight, bias, *, num_groups, eps):
         return AcmeGroupNorm(num_groups, eps, x.dtype)
     return AcmeGroupNormAffine(num_groups, eps, x.dtype)
 ```
+
+op 层调用 `build_kernel` 时，经 `torch.accelerator` 把调用设备设为当前设备；调用设备不是进程 accelerator 的类型时不切换。
+
+`build_kernel` 返回的 kernel 可以另外定义两个可选成员，含义与 in-tree `Kernel` 的同名成员相同：
+
+| 成员 | op 层如何使用 |
+| --- | --- |
+| `request_tune()` | op 处于调优模式时调用。`op.request_tune()` 对已构造的 kernel 调用它，之后构造的 kernel 在首次调用之前调用它。每次请求在 kernel 所属的每个设备上各调用一次，调用时该设备是当前设备 |
+| `config` | 一个非空 dict。op 自己没有非空配置时，`op.kernel_config()` 返回第一个非空的 kernel `config` |
+
+`request_tune()` 遵守四条约定：
+
+- 按设备幂等：之后的每次请求都会再次调用它；同一个对象被两个设备共享时，在每个设备上各调优一次。
+- 可以当场调优，也可以推迟到下一次 launch；推迟时，完成调优的那次调用必须在 CUDA graph 捕获之前（见[各阶段允许做什么](#phase-limits)）。
+- 它抛出的异常就是触发它的那次调用或 `op.request_tune()` 的异常；构造时调优失败的 kernel 不进记忆表，下一次调用重新构造。
+- kernel 没有定义它时不调优，op 实例只警告一次。
 
 ### 3. `register_detector`
 
@@ -119,6 +136,42 @@ def register_kernel_builder(op: str, target: str, build_kernel: BuildKernel) -> 
 ```
 
 由 backend 调用，每个要接管的 op 一次。它登记 `(op, target)` 的 kernel 构造函数；同一组重复登记会报错。
+
+### 非 CUDA 设备的设备事实：`register_device_facts` {#device-facts}
+
+```python
+def register_device_facts(device_type: str, read: Callable[[torch.device], DeviceFacts]) -> None: ...
+```
+
+由 backend 调用，每种设备类型一次。kernel 选择读取调用设备的四项设备事实：`arch`、`calibration`、`sm_count`、`smem_budget`。
+
+| 设备类型 | 设备事实的来源 |
+| --- | --- |
+| `cuda` | TileOPs 自己读取 |
+| 已注册的其他类型 | 注册的 `read`：收到调用的 `torch.device`，返回 `DeviceFacts` |
+| 未注册的类型，如 `cpu` | 没有设备事实：`-1 / None / 0 / 0` |
+
+- 需要注册的是用 `register_kernel_type` 加入、按架构、SM 数或共享内存选择的实现。声明了 `supported_archs` 的实现在未注册的设备类型上永远不可用。
+- 只服务整个 op 的 target 不需要注册：target 的 kernel 自己决定怎么选。
+- 按设备类型注册，与 target 无关：同一种设备上有多个 target 时，只由一个包注册。重复注册、注册 `cuda` 都报 `BackendError`。
+- `arch` 只在同一种设备类型内可比，所以声明 `supported_archs` 的实现，其 `devices` 只能有一种设备类型。
+- `read` 收到的设备：设备是进程 accelerator 的类型时，op 层先补上设备序号；`cpu` 这类不编号的设备原样传入。
+- `read` 的调用时机：每个 call spec 第一次读设备事实时调用一次，结果只存在这个 call spec 上；声明了 `supported_archs` 的 kernel 构造时也调用一次。开销大时由 backend 在 `read` 内缓存。
+- `read` 抛异常或返回值不合规（不是 `DeviceFacts`、字段类型不对、`sm_count` 或 `smem_budget` 为负）时，op 层报 `BackendError`，指出是哪个 `read`。
+
+```python
+import torch
+from tileops.backend import DeviceFacts, register_device_facts
+import acme_runtime                                      # 厂商 runtime，这里是假想的
+
+def read_acme(device: torch.device) -> DeviceFacts:
+    props = acme_runtime.device_properties(device.index)
+    return DeviceFacts(arch=props.arch, calibration=None,
+                       sm_count=props.compute_units,
+                       smem_budget=props.shared_memory_per_block)
+
+register_device_facts("acme", read_acme)                 # "acme" 是 torch 的设备类型名
+```
 
 ### `TensorSpec`
 
@@ -316,7 +369,7 @@ python -m pytest -q       # 两块 H200 可见与 CUDA_VISIBLE_DEVICES="" 两种
 
 ```bash
 docker run --rm --gpus all -v "$PWD/..":/work -w /work \
-  ghcr.io/tile-ai/tileops-runner:cu132-torch2.13-tl-afcebed1-dev \
+  ghcr.io/tile-ai/tileops-dev:cuda13.2-torch2.13-tilelang0.1.12 \
   bash -lc 'pip install -e /work/TileOPs --no-deps -q &&
             pip install -e /work/tileops-backend-example --no-deps -q &&
             cd /work/tileops-backend-example && python -m pytest -q'
@@ -391,6 +444,7 @@ decode 路径会被 CUDA graph 捕获，因此各阶段允许执行的操作规�
 | 查记忆表（键与重建条件见 [kernel 的重建条件](#memo)） | 一次字典查找 | 其他任何操作 |
 | `detect` | 一次谓词判断 | 任何 import，任何加锁 |
 | 构造 kernel | 选择实现、编译、分配显存、重新 import、建立 handle | 依赖真实张量的调优 |
+| kernel 的 `request_tune()` | 编译、分配显存、计时 | 依赖调用方真实张量的调优 |
 | 调用 kernel | 启动已编译的 kernel，经 torch allocator 分配输出 | 编译、惰性初始化、建立 handle、host 端同步 |
 
 **模块顶层的 import 不得触发编译。** TileOPs 在构造第一个 op 时 import backend 模块，编译应当发生在 `build_kernel` 被调用时。
@@ -400,7 +454,7 @@ decode 路径会被 CUDA graph 捕获，因此各阶段允许执行的操作规�
 - **必须在当前流上启动。** 在 CUDA 上，当前流即 `torch.cuda.current_stream(device)`，不得改用默认流。自带 launcher 的 backend 尤其容易违反这一条。
 - **内部分配的生命周期必须覆盖异步执行。** 如果只把裸指针传给 launch，对应对象必须存活到该流执行完成。协议不提供 workspace，这部分安全由 backend 自己保证。
 
-因为构造 kernel 时允许编译，调用方需要在捕获之前完成预热，即至少执行一次同形状的非捕获调用。捕获期间只允许「查表命中后直接调用」这一条路径。
+因为构造 kernel 时允许编译，调用方需要在捕获之前完成预热，即至少执行一次同形状的非捕获调用。`op.request_tune()` 之后同样如此：每种形状在捕获之前至少再执行一次非捕获调用，推迟到 launch 的调优在这次调用中完成。捕获期间只允许「查表命中后直接调用」这一条路径。
 
 ## 安装之后：三种状态 {#three-states}
 
@@ -488,14 +542,73 @@ TileOPs 把 `torch.device` 原样传给 `detect`，自己不解析它。原因�
 | # | op 层提供 | 对 backend 意味着什么 |
 | --- | --- | --- |
 | 1 | torch 侧的公开 API 与参数语义 | 这个 op 如何被调用、参数名与各参数的含义均已确定，backend 既不定义也不能改动 |
-| 2 | manifest 校验 | dtype 或形状不合规的调用由 op 层拒绝，不会到达 backend |
+| 2 | manifest 校验 | 不符合 manifest 签名的调用由 op 层拒绝，不会到达 backend；签名之内的检查分工见下文 |
 | 3 | 参数按名字传入 | backend 收到的参数名是 manifest `params` 的名字，值是 op 实例保存的值。manifest 中默认为 null 的参数，传入的是 op 选定的值，可能是 `None`，也可能是一个具体数值 |
 | 4 | 输入的连续性归一 | 本次调用不写入的输入都转成连续张量；被写入的输入按调用方传入的原样传给 backend，除非 manifest 声明它 `contiguous: true` |
 | 5 | kernel 的记忆与重用 | 构造函数对每种特化调用一次：设备与输入签名相同的后续调用直接使用上一次的返回值。因此构造函数内部可以编译，op 层保证它不会被重复调用 |
-| 6 | `torch.compile` 与 CUDA graph 的边界 | op 层把一次调用包装成不透明 op，并另配一个 fake，使编译器不执行也能推出输出的形状与 dtype。**backend 的 kernel 不为编译做任何事**，细节见[接入 torch.compile](torch-compile.md) |
-| 7 | roofline、profile 与数值测试 | op 层已有的测试会用 backend 的 kernel 运行一遍，与 manifest 的 `ref_api` 比对数值；性能报告照常产出 |
+| 6 | `torch.compile` 与 CUDA graph 的边界 | 对有编译边界的 op（spec 有调用期张量输入、没有 `composition`），op 层把一次调用包装成不透明 op，并另配一个 fake，使编译器不执行也能推出输出的形状与 dtype。**backend 的 kernel 不为编译做任何事**，细节见[接入 torch.compile](torch-compile.md) |
+| 7 | roofline、profile 与数值测试 | op 层已有的测试可以用 backend 的 kernel 运行，见[backend 的测试结论](#test-claim)；性能报告见[性能报告](#reports) |
 
-七项均与硬件无关，每个 target 得到的完全相同。接入第三方 backend 时不得绕过其中任何一项，也不得另行实现。
+七项由 op 层统一实现，每个 target 在它所运行的设备上得到的完全相同。接入第三方 backend 时不得绕过其中任何一项，也不得另行实现。
+
+第 2 项的检查分三层：
+
+| 检查 | 由谁做 | 不满足时 |
+| --- | --- | --- |
+| dtype 与形状是否符合 manifest 签名 | op 层 | 调用不到达 backend |
+| target 是否服务签名之内的这组 dtype、形状与参数 | `build_kernel` | `build_kernel` 报错 |
+| 依赖张量取值的条件，如 RoPE 的位置越界 | target 的 kernel，在调用时；op 层不替它检查 | kernel 须与 in-tree 实现一样抛 `ValueError`，op 层把异常原样传给调用方 |
+
+### 性能报告 {#reports}
+
+benchmark 的运行设备由 `--tileops-device` 指定，必须是 CUDA 或进程的 accelerator；`cpu` 上不做 benchmark。
+
+| 运行设备 | 计时方式 | `timing` 一栏 |
+| --- | --- | --- |
+| CUDA | CUPTI | `cupti` |
+| CUDA，CUPTI 失败且运行带 `--tileops-allow-events-fallback` | CUDA events | `cuda-events` |
+| 其他 accelerator | 设备事件（`torch.Event`） | `events` |
+
+设备事件计时不区分执行与 kernel 之间的间隙，`device_busy_ms` 与 `latency_ms` 相等。
+
+baseline 库在运行设备上不能运行（没有安装，或只能在 CUDA 上运行）时：
+
+| baseline 的角色 | CUDA 上 | 其他设备上 |
+| --- | --- | --- |
+| 必选对照 | 这个 case 失败 | 这个 case 跳过并写明原因 |
+| 可选对照 | 去掉这一列 | 去掉这一列 |
+
+### backend 的测试结论 {#test-claim}
+
+backend 在自己的设备上运行 op 层已有的测试：
+
+```bash
+pytest tests/ops --tileops-target=<t> --tileops-device=<d> --junitxml=<report>
+```
+
+`<t>` 是服务设备 `<d>` 的 backend target；`cpu` 加 `builtin` 不是 `tests/ops` 支持的运行配置。三个标记决定哪些测试运行：
+
+| 标记 | 含义 | 在 backend 的运行中 |
+| --- | --- | --- |
+| `in_tree_kernels` | 测试依赖 in-tree 实现 | `--tileops-target` 不是 `builtin` 时去掉 |
+| `cuda_only` | 测试本身需要 CUDA | `--tileops-device` 不是 `cuda` 时去掉 |
+| `sm80` / `sm86` / `sm89` / `sm90` | 测试需要该 CUDA 架构 | 设备不符时跳过，计入 skip 数 |
+
+JUnit 中每个调用了 `check()` 的测试带 `op` 与 `checked_outputs` 两个属性。
+
+backend 对一个 op 的结论是「通过了这台设备上实际运行的测试」，不代表覆盖了这个 op 全部的 dtype、形状与输出。结论成立需要三个条件：
+
+| 条件 | 内容 |
+| --- | --- |
+| 有数值证据 | 该 op 名下至少一个测试通过且 `checked_outputs > 0` |
+| 没有失败 | 该 op 名下没有失败的测试 |
+| 行为测试 | 不带 `op` 属性的测试，整次运行没有失败 |
+
+给出结论时随附三组数字：
+
+- 该 op 名下的通过数与 skip 数，`checked_outputs == 0` 的测试记为 skip；
+- 各测试的 `checked_outputs`；
+- 按测试文件统计的被去掉的测试数。被去掉的测试不进 JUnit，这个数由 backend 自行计算，即两次 `pytest tests/ops --collect-only -q` 的 node id 之差：一次用默认参数，一次加上 `--tileops-target` 与 `--tileops-device`。
 
 TileOPs 的 in-tree kernel（[`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels)）是**默认实现**：它没有 target 名，也不进入注册表。
 
@@ -505,7 +618,7 @@ TileOPs 的 in-tree kernel（[`src/tileops/kernels/`](https://github.com/tile-ai
 
 TileOPs 按**设备加输入签名**记住 `build_kernel` 的返回值。这个键的构成是：
 
-> 本次调用张量所在的设备，加上按 `signature.inputs` 顺序逐项取出的 `(dtype, shape)`；声明为 optional 而本次没有传入的输入，这一项记 `None`。
+> 调用设备（见[调用设备](user-guide/manifest/calls.md#device)），加上按 `signature.inputs` 顺序逐项取出的 `(dtype, shape)`；声明为 optional 而本次没有传入的输入，这一项记 `None`。
 
 因此，**设备与输入签名都相同的两次调用，TileOPs 使用同一个 kernel**，不再调用 `build_kernel`。同一个 target 的第二块卡会重新构造一次，因为为一块卡编译出的产物不一定能在另一块卡上启动。参数不进入这个键，因为它们对一个 op 实例而言是固定的。
 

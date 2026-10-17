@@ -132,7 +132,7 @@ A primitive is a built-in function callable in expressions, such as `broadcast`,
 
 ## 6. Writes to arguments: effect {#effects}
 
-An op without effect declarations only reads its inputs and allocates new tensors for its outputs. If an op writes to an argument, an effect is declared on the corresponding tensor in the signature. Effects determine the read and write counts of the roofline, and the operator schema generated for an op that declares a compile boundary.
+An op without effect declarations only reads its inputs and allocates new tensors for its outputs. If an op writes to an argument, an effect is declared on the corresponding tensor in the signature. Effects determine the read and write counts of the roofline, and the operator schema generated for an op with a compile boundary.
 
 **Table 1** Effect declarations
 
