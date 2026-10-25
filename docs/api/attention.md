@@ -7,7 +7,7 @@ what runs when you call `op(...)`.
 
 ## Multi-Head Attention
 
-::: tileops.attention.MHADecodePagedWithKVCacheFwdOp
+::: tileops.attention.MHAPagedFwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -15,7 +15,7 @@ what runs when you call `op(...)`.
 
 ## Grouped-Query Attention
 
-::: tileops.attention.GQABwdOp
+::: tileops.attention.GQADenseBwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -41,7 +41,7 @@ what runs when you call `op(...)`.
 
 ## Multi-Head Latent Attention
 
-::: tileops.attention.MLADecodeWithKVCacheFwdOp
+::: tileops.attention.MLADenseDecodeFwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -93,7 +93,7 @@ what runs when you call `op(...)`.
 
 ## DeepSeek Sparse Attention
 
-::: tileops.attention.DSADecodeWithKVCacheFwdOp
+::: tileops.attention.DSADenseFwdOp
     options:
       show_root_heading: true
       heading_level: 3

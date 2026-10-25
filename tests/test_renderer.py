@@ -151,6 +151,7 @@ def test_the_package_decides_the_family_not_a_word_in_the_name():
     assert g.family_of("DeltaDecodeFwdOp",
                        "tileops.ops.linear_attention.delta") == "linear_attention"
     assert g.family_of("GemmOp", "tileops.ops.gemm.gemm") == "linear_algebra"
+    assert g.family_of("GEMMFwdOp", "tileops._ops.gemm.gemm") == "linear_algebra"
     # An op defined in a module rather than a package still falls through.
     assert g.family_of("RmsNormFwdOp", None) == "normalization"
 

@@ -35,8 +35,6 @@ package "op 实例的 in-tree 实现" {
   rectangle "Op 类的 forward" as body <<dev>>
   package "一个 kernel 接口的实现（构造时安装）" as snap {
     rectangle "kernel_types 中\n继承该接口的类" as intree <<dev>>
-    rectangle "register_kernel_type\n新增的 key\n（此后构造的所有实例）" as added <<ext>>
-    intree -[hidden]down- added
   }
 }
 

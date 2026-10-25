@@ -56,7 +56,7 @@ The construction phase first solves the indices that construction-time tensors d
 
 | No. | spec | Declaration | Solved index |
 | --- | --- | --- | --- |
-| 1 | SiluAndMul | `x: "[M, 2 * N]"` | `N`, also checking that the axis length is even |
+| 1 | SiLUAndMul | `input: "[M, 2 * N]"` | `N`, also checking that the axis length is even |
 | 2 | GQA varlen | `cu_seqlens_q: "[B + 1]"` | `B` |
 | 3 | GemmW4A16 | `activation: "[M, K]"`, `packed_weight: "[N, K // 2]"` | `K` is solved from `activation`; `K // 2` in `packed_weight` is used only for checking |
 

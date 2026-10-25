@@ -56,7 +56,7 @@ op 在 `interfaces` 中声明它调用 kernel 的位置，每个位置对应一�
 
 | No. | spec | 声明 | 求得的 index |
 | --- | --- | --- | --- |
-| 1 | SiluAndMul | `x: "[M, 2 * N]"` | `N`，同时检查轴长为偶数 |
+| 1 | SiLUAndMul | `input: "[M, 2 * N]"` | `N`，同时检查轴长为偶数 |
 | 2 | GQA varlen | `cu_seqlens_q: "[B + 1]"` | `B` |
 | 3 | GemmW4A16 | `activation: "[M, K]"`、`packed_weight: "[N, K // 2]"` | `K` 由 `activation` 求得，`packed_weight` 的 `K // 2` 只用于检查 |
 

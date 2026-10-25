@@ -31,12 +31,12 @@ bench.Runner(op, case).compare(implementations)
 import pytest
 
 from benchmarks import api as bench
-from tileops.ops import BmmFwdOp
+from tileops.gemm import BMMFwdOp
 
 
-@pytest.mark.parametrize("case", bench.cases(BmmFwdOp), ids=lambda case: case.id)
+@pytest.mark.parametrize("case", bench.cases(BMMFwdOp), ids=lambda case: case.id)
 def test_bmm_bench(case, vllm_bmm, sglang_bmm):
-    op = BmmFwdOp(**case.arguments)
+    op = BMMFwdOp(**case.arguments)
 
     bench.Runner(op, case).compare(
         {
@@ -49,8 +49,8 @@ def test_bmm_bench(case, vllm_bmm, sglang_bmm):
 
 这段代码中：
 
-- `bench.cases(BmmFwdOp)` 为 manifest 中每个 workload 行的每个 dtype case 各生成一个 case，`case.id` 同时用作 pytest 的用例 id。
-- `BmmFwdOp(**case.arguments)` 用 case 提供的构造参数创建 op。
+- `bench.cases(BMMFwdOp)` 为 manifest 中每个 workload 行的每个 dtype case 各生成一个 case，`case.id` 同时用作 pytest 的用例 id。
+- `BMMFwdOp(**case.arguments)` 用 case 提供的构造参数创建 op。
 - `vllm_bmm` 与 `sglang_bmm` 是已经适配成与 op 相同输入签名的 callable，`Runner` 会以 `case.inputs` 调用它们。
 - 映射中的键会原样写入报告。`tileops` 这个名字已经由 op 占用，不能再用作键；如果只传入一个实现而不是映射，它在报告中记为 `baseline`。
 - `case.reference` 以 `"torch-cublas"` 为名传入，因此它既负责生成期望结果，也作为一个对比实现参与计时。
@@ -70,8 +70,8 @@ python -m pytest benchmarks/ops/bench_bmm.py --tileops-verify
 
 ```python
 ENTRIES = {
-    "BmmFwdOp": Entry(BmmWorkload.from_call),
-    "GemmFwdOp": Entry(GemmWorkload.from_call),
+    "BMMFwdOp": Entry(BMMWorkload.from_call),
+    "GEMMFwdOp": Entry(GEMMWorkload.from_call),
 }
 ```
 

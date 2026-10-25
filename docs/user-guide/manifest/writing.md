@@ -13,16 +13,16 @@ How to write optional inputs, shapes that vary with parameters, side effects, me
 
 ## 1. Structure of a spec {#anatomy}
 
-The SiluAndMul spec uses only the fields above:
+The SiLUAndMul spec uses only the fields above:
 
 ```yaml
-SiluAndMulFwdOp:
+SiLUAndMulFwdOp:
   family: elementwise
   status: implemented
   signature:
     forall: {M: Dim, N: Dim, T: "DType[float16 | bfloat16 | float32]"}
     inputs:
-      x: {dtype: T, shape: "[M, 2 * N]"}
+      input: {dtype: T, shape: "[M, 2 * N]"}
     outputs:
       output: {dtype: T, shape: "[M, N]"}
   workloads:
@@ -187,7 +187,7 @@ roofline:
   flops: "2 * M * N * K"        # inline formula; when bytes is omitted it is derived from the signature
 # or
 roofline:
-  func: "tileops.perf.formulas.gqa_fwd_roofline"
+  func: "tileops._perf.formulas.gqa_dense_fwd_roofline"
 ```
 
 - Inline formulas are written in the expression language and can refer to the signature's indices, construction parameters and `let` entries, as well as `present(t)`, `bytes(t)` (the byte count of tensor `t`) and built-in primitives. When the cost depends on whether a tensor is passed, the formula can distinguish the cases with `present(...)`.
@@ -202,7 +202,7 @@ roofline:
   - recurrent ops such as linear attention and state-space scans count by the chunked algorithm at the chunk size when the signature has a chunk size, and by per-token recurrence otherwise;
   - elementwise operations, attention and MoE are counted by the conventions in the design document [Roofline § 1.3](../../design/roofline.md#13-convention);
   - a path that is an identity map on the call's dtype counts as 0.
-- `func` is used when the formula needs Python logic. It points to a module-level function `f(call) -> tuple[int, int]` in `tileops.perf.formulas`. The function reads only its argument `call` and does not read the op instance. `call` is one checked call and provides the following interface:
+- `func` is used when the formula needs Python logic. It points to a module-level function `f(call) -> tuple[int, int]` in `tileops._perf.formulas`. The function reads only its argument `call` and does not read the op instance. `call` is one checked call and provides the following interface:
 
   **Table 4** The argument `call` of a roofline `func`
 

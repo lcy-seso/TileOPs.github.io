@@ -7,9 +7,9 @@ dtypes — and the call takes the tensors. Both appear under each op as `__init_
 
 ```python
 import torch
-from tileops.gemm import GemmFwdOp
+from tileops.gemm import GEMMFwdOp
 
-op = GemmFwdOp()                        # construct once, reuse
+op = GEMMFwdOp()                        # construct once, reuse
 d = op(a, b)                         # the specialized kernel is built on first call
 ```
 
@@ -51,4 +51,4 @@ Two things this reference does not carry:
 
 These pages are generated from the docstrings in TileOPs, so an op whose docstring is
 thin reads thin here. The fix belongs upstream, in
-[`src/tileops/ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/ops).
+[`src/tileops/_ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_ops).

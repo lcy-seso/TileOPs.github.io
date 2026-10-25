@@ -14,8 +14,8 @@ This page describes:
 ```python
 class MoEExpertMLPFwdOp(Op):
     delegate_types: ClassVar[Mapping[str, type[Op]]] = {
-        "gate_up": MoEGroupedGemmFwdOp,
-        "down": MoEGroupedGemmFwdOp,
+        "gate_up": MoEGroupedGEMMFwdOp,
+        "down": MoEGroupedGEMMFwdOp,
     }
 
     def __init__(self, layout, activation="silu_and_mul", *, target=None):
@@ -28,7 +28,7 @@ class MoEExpertMLPFwdOp(Op):
 ```
 
 The example leaves out the class docstring and `forward`; the full code is in
-[`src/tileops/ops/moe/staged.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/ops/moe/staged.py).
+[`src/tileops/_ops/moe/staged.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_ops/moe/staged.py).
 Sub-ops follow the same rule as kernels: declared on the class first, then obtained through a
 method of the base class.
 
@@ -53,7 +53,7 @@ method of the base class.
     - A repeated call with the same `(stage, identity)` returns the instance already held.
     - Registering an instance already held under another `(stage, identity)` makes
       `delegate_for` raise.
-- **Derived enumeration.** `held_delegates()`, `iter_kernels()` and `request_tune()` are
+- **Derived enumeration.** `_held_delegates()`, `iter_kernels()` and `request_tune()` are
   derived from the sub-ops `delegate_for` holds; a composite op does not override them.
 
 ## 2. Sub-op calls are filed under stages {#stages}

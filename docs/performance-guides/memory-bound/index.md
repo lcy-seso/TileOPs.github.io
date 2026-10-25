@@ -4,12 +4,12 @@
 
 On a GPU, kernel speed is determined by whether compute or bandwidth becomes
 the bottleneck first. TileOPs measures a
-**[calibration factor](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml)**
+**[calibration factor](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_perf/profiles/h200.yaml)**
 with a [macro benchmark](https://github.com/tile-ai/TileOPs/tree/main/benchmarks/hardware):
 the hardware peak from the specification, multiplied by that factor, gives the
 effective peak a kernel can actually reach. That effective peak is the reference
 point for tuning. On an H200, the measured values are
-[**57.27** TFLOP/s for fp32 FMA and **4.50** TB/s of memory bandwidth](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/perf/profiles/h200.yaml).
+[**57.27** TFLOP/s for fp32 FMA and **4.50** TB/s of memory bandwidth](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_perf/profiles/h200.yaml).
 The **ridge point** of the roofline is where the bandwidth slope meets the
 compute ceiling. Dividing compute by bandwidth places it at an arithmetic
 intensity of **12.72 flop/byte**, the number of floating-point operations per

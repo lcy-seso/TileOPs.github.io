@@ -10,7 +10,7 @@ schedule, and an unrelated pull request here is not the place to stop for one.
 Families come from `_FAMILIES` in `tileops/__init__.py`, their ops from the
 `__all__` of `tileops/<family>.py`, read with `ast`: importing a family pulls in
 torch, which the docs environment does not install. A path of more than two
-segments, such as `tileops.trace.api._Trace`, belongs to no family and is left
+segments, such as `tileops.trace._api._Trace`, belongs to no family and is left
 alone.
 
 Usage:

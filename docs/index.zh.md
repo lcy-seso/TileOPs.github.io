@@ -18,12 +18,12 @@ op 在构造时不绑定任何形状。形状和 dtype 取自调用时传入的�
 
 ```python
 import torch
-from tileops.gemm import GemmFwdOp
+from tileops.gemm import GEMMFwdOp
 
 a = torch.randn(4096, 4096, device="cuda", dtype=torch.float16)
 b = torch.randn(4096, 4096, device="cuda", dtype=torch.float16)
 
-op = GemmFwdOp()                        # 默认 NT 布局：a=[M, K], b=[N, K]
+op = GEMMFwdOp()                        # 默认 NT 布局：a=[M, K], b=[N, K]
 d = op(a, b)                         # -> [M, N]
 flops, nbytes = op.eval_roofline()   # 本次调用所需的计算量与访存量
 ```

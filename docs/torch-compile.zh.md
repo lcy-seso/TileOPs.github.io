@@ -77,7 +77,7 @@ block(x, w)
 
 本节说明有编译边界的 op 需要编写的代码、边界与 fake 如何生成，以及 target 判定为什么要在节点内部执行。其中涉及的追踪、切图与 guard 见 [dynamo 是怎么工作的](#dynamo)。
 
-下面是 `RMSNormFwdOp` 的骨架，略去 docstring，完整代码见 [`src/tileops/ops/norm/rms_norm.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/ops/norm/rms_norm.py)：
+下面是 `RMSNormFwdOp` 的骨架，略去 docstring，完整代码见 [`src/tileops/_ops/norm/rms_norm.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_ops/norm/rms_norm.py)：
 
 ```python
 class RMSNormFwdOp(Op):

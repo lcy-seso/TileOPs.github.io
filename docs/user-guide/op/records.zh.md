@@ -59,15 +59,15 @@
 
 | No. | 方法 | 返回 |
 | --- | --- | --- |
-| 1 | `iter_kernels()` | • 各接口的 entry 和持有的子 op 中的每个 `Kernel`，每个只返回一次<br>• 不遍历 target 构造的 kernel，它们由 `built_entries(interface)` 查看 |
-| 2 | `built_entries(interface)` | • in-tree 路径：返回这个 kernel 接口已构造的 entry，按 `(实现类, identity)` 区分<br>• target 服务时：返回这个 op 的全部 target kernel，按设备与每个输入的 dtype、shape 区分，`interface` 不参与筛选 |
-| 3 | `held_delegates()` | 组合 op 持有的子 op，按 stage 顺序 |
+| 1 | `iter_kernels()` | • 各接口的 entry 和持有的子 op 中的每个 `Kernel`，每个只返回一次<br>• 不遍历 target 构造的 kernel，它们由 `_entries_built(interface)` 查看 |
+| 2 | `_entries_built(interface)` | • in-tree 路径：返回这个 kernel 接口已构造的 entry，按 `(实现类, identity)` 区分<br>• target 服务时：返回这个 op 的全部 target kernel，按设备与每个输入的 dtype、shape 区分，`interface` 不参与筛选 |
+| 3 | `_held_delegates()` | 组合 op 持有的子 op，按 stage 顺序 |
 
 三个方法的用途：
 
-- `built_entries()` 只用于测试与 benchmark 报告。
+- `_entries_built()` 只用于测试与 benchmark 报告。
 - `request_tune()` 与 `kernel_config()` 经 `iter_kernels()` 取得 in-tree kernel，另按设备取得 target 构造的 kernel。
-- `held_delegates()` 还供失败时递归撤销子 op 使用。
+- `_held_delegates()` 还供失败时递归撤销子 op 使用。
 
 调用路径不用这三个方法取得 kernel：
 
@@ -87,5 +87,5 @@
     - 对已构造的每个 kernel 调用 `Kernel.request_tune()`：程序已构建的 kernel 立即调优，尚未构建的在构建程序的那次启动时调优；没有 `autotune_configs` 的 kernel 不调优。
     - 之后构造的 entry，基类构造后立即对其中每个 `Kernel` 调用 `request_tune()`。
 - **target：** target 构造的 kernel 可选定义 `request_tune()`。`request_tune()` 对已构造的每个 target kernel，在它所属的每个设备上各调用一次，调用时该设备是当前设备；之后构造的 target kernel 在首次调用之前调用。kernel 没有定义它时发出警告，每个实例只警告一次。约定见[接入新的硬件 backend § build_kernel](../../backends.md#build-kernel)。
-- **子类覆盖：** 以上是基类的行为，子类可以覆盖。`GemmW4A16FwdOp` 不支持通用调优：覆盖 `request_tune()`，发出警告，改用自己校准过的选择。
+- **子类覆盖：** 以上是基类的行为，子类可以覆盖。`GEMMW4A16FwdOp` 不支持通用调优：覆盖 `request_tune()`，发出警告，改用自己校准过的选择。
 - **`kernel_config()`：** 返回 op 自己的配置；没有时，先在 `iter_kernels()` 枚举的 kernel 中、再在 target 构造的 kernel 中，返回第一个非空的 `config`。

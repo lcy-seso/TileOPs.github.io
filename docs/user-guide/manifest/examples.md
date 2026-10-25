@@ -2,11 +2,11 @@
 
 This page collects five real specs from the manifest. Each spec is followed by a table that maps each form used in it to the section that describes it. The specs are taken from `src/tileops/manifest/`, with comments and some workload rows removed.
 
-## 1. GemmFwdOp: type family {#gemm}
+## 1. GEMMFwdOp: type family {#gemm}
 
 ```yaml
 # src/tileops/manifest/spec/gemm.yaml
-GemmFwdOp:
+GEMMFwdOp:
   ref_api: "torch.matmul"
   family: gemm
   status: implemented
@@ -38,7 +38,7 @@ GemmFwdOp:
     flops: "2 * M * N * K"
 ```
 
-**Table 1** The forms used in `GemmFwdOp`
+**Table 1** The forms used in `GEMMFwdOp`
 
 | No. | Form in the spec | Described in |
 | --- | --- | --- |
@@ -124,10 +124,10 @@ MeanPoolingFwdOp:
       accum_dtype: {type: torch.dtype}
     inputs:
       x: {dtype: T, shape: "[B, S, H, D]"}
-      offsets: {dtype: int32, optional: true, shape: "[NS + 1]", values: "prefix_sum(seq_lens)", requires: ["prefix_offsets(S)"]}
-      indices: {dtype: int32, optional: "present(offsets)", shape: "[NC, 2]", values: "chunk_indices(seq_lens, chunk_size)"}
+      cu_seqlens: {dtype: int32, optional: true, shape: "[NS + 1]", values: "prefix_sum(seq_lens)", requires: ["prefix_offsets(S)"]}
+      chunk_indices: {dtype: int32, optional: "present(cu_seqlens)", shape: "[NC, 2]", values: "chunk_indices(seq_lens, chunk_size)"}
     outputs:
-      output: {dtype: T, shape: "PoolOut[present(offsets), B, NC, S, chunk_size, H, D]"}
+      output: {dtype: T, shape: "PoolOut[present(cu_seqlens), B, NC, S, chunk_size, H, D]"}
     shape_rules:
     - "chunk_size > 0 and chunk_size % 32 == 0"
     - "D <= 128 or D % 128 == 0"
@@ -135,29 +135,29 @@ MeanPoolingFwdOp:
 
   workloads:
   - {B: 1, S: 8192, H: 64, D: 128, chunk_size: 64, accum_dtype: float32, dtype_cases: [{T: float16}, {T: bfloat16}], label: uniform-8k}
-  - {B: 1, S: 8192, H: 64, D: 128, seq_lens: "repeat(2048, 4)", chunk_size: 64, accum_dtype: float32, some: [offsets], dtype_cases: [{T: float16}, {T: float32}], label: ragged-even}
+  - {B: 1, S: 8192, H: 64, D: 128, seq_lens: "repeat(2048, 4)", chunk_size: 64, accum_dtype: float32, some: [cu_seqlens], dtype_cases: [{T: float16}, {T: float32}], label: ragged-even}
   # remaining rows omitted
 
   roofline:
-    flops: "B * S * H * D + B * (NC if present(offsets) else ceil_div(S, chunk_size)) * H * D"
+    flops: "B * S * H * D + B * (NC if present(cu_seqlens) else ceil_div(S, chunk_size)) * H * D"
 ```
 
 **Table 3** The forms used in `MeanPoolingFwdOp`
 
 | No. | Form in the spec | Described in |
 | --- | --- | --- |
-| 1 | `indices` is declared `optional: "present(offsets)"`, so it is passed together with `offsets` or omitted together with it | [Extensions § 1](extensions.md#presence) |
-| 2 | the type family `PoolOut` uses `present(offsets)` as its discriminant | [Extensions § 2](extensions.md#type-family) |
-| 3 | the first row does not pass `offsets` and does not use `seq_lens`, so the row does not give it; the second row passes `offsets` through `some: [offsets]` and gives `seq_lens`, written here as the value primitive call `"repeat(2048, 4)"` | [Extensions § 1](extensions.md#presence), [Spec fields § 8](writing.md#workloads) |
+| 1 | `chunk_indices` is declared `optional: "present(cu_seqlens)"`, so it is passed together with `cu_seqlens` or omitted together with it | [Extensions § 1](extensions.md#presence) |
+| 2 | the type family `PoolOut` uses `present(cu_seqlens)` as its discriminant | [Extensions § 2](extensions.md#type-family) |
+| 3 | the first row does not pass `cu_seqlens` and does not use `seq_lens`, so the row does not give it; the second row passes `cu_seqlens` through `some: [cu_seqlens]` and gives `seq_lens`, written here as the value primitive call `"repeat(2048, 4)"` | [Extensions § 1](extensions.md#presence), [Spec fields § 8](writing.md#workloads) |
 | 4 | `NS` and `NC` are solved by unification of the generator results and are not given in the row | [Extensions § 7](extensions.md#generators) |
 | 5 | `category(accum_dtype) == 'float'` requires the accumulation dtype to be a floating-point type | [Extensions § 9](extensions.md#scalar-dtype) |
-| 6 | the roofline formula distinguishes the two cases with `present(offsets)` | [Spec fields § 9](writing.md#roofline) |
+| 6 | the roofline formula distinguishes the two cases with `present(cu_seqlens)` | [Spec fields § 9](writing.md#roofline) |
 
-## 4. ReluFwdOp: arbitrary rank and effect {#relu}
+## 4. ReLUFwdOp: arbitrary rank and effect {#relu}
 
 ```yaml
 # src/tileops/manifest/spec/elementwise_unary_activation.yaml
-ReluFwdOp:
+ReLUFwdOp:
   ref_api: "torch.nn.functional.relu"
   family: elementwise
   status: implemented
@@ -179,7 +179,7 @@ ReluFwdOp:
     flops: "prod(S)"
 ```
 
-**Table 4** The forms used in `ReluFwdOp`
+**Table 4** The forms used in `ReLUFwdOp`
 
 | No. | Form in the spec | Described in |
 | --- | --- | --- |

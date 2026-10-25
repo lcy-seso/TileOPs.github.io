@@ -65,8 +65,8 @@ abstract class Op #E9EAF0 {
     request_tune()
     kernel_config()
     iter_kernels()
-    built_entries(interface)
-    held_delegates()
+    _entries_built(interface)
+    _held_delegates()
     .. <i>internal interface</i> ..
     __init__(*, target=None)
     {abstract} <color:#DC2626>forward(...)</color>
@@ -164,7 +164,7 @@ object "entry" as Entry #EEF2E6 {
     here, one RMSNormOnChipKernel instance
 }
 
-class MoEGroupedGemmFwdOp <<Op subclass>> #E9EAF0 {
+class MoEGroupedGEMMFwdOp <<Op subclass>> #E9EAF0 {
     forward(...)
 }
 
@@ -178,7 +178,7 @@ class RMSNormOnChipKernel #EEF2E6 {
 ' subclasses on top
 RMSNormFwdOp -down-|> Op
 MoEExpertMLPFwdOp -down-|> Op
-MoEExpertMLPFwdOp o-right-> "2" MoEGroupedGemmFwdOp
+MoEExpertMLPFwdOp o-right-> "2" MoEGroupedGEMMFwdOp
 
 ' code generation below
 Op .left.> _CompileBoundary

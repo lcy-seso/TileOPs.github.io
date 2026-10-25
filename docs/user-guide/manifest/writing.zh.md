@@ -13,16 +13,16 @@
 
 ## 1. spec 的结构 {#anatomy}
 
-SiluAndMul 的 spec 只用到了上述字段：
+SiLUAndMul 的 spec 只用到了上述字段：
 
 ```yaml
-SiluAndMulFwdOp:
+SiLUAndMulFwdOp:
   family: elementwise
   status: implemented
   signature:
     forall: {M: Dim, N: Dim, T: "DType[float16 | bfloat16 | float32]"}
     inputs:
-      x: {dtype: T, shape: "[M, 2 * N]"}
+      input: {dtype: T, shape: "[M, 2 * N]"}
     outputs:
       output: {dtype: T, shape: "[M, N]"}
   workloads:
@@ -187,7 +187,7 @@ roofline:
   flops: "2 * M * N * K"        # 内联公式；省略 bytes 时由签名推导
 # 或
 roofline:
-  func: "tileops.perf.formulas.gqa_fwd_roofline"
+  func: "tileops._perf.formulas.gqa_dense_fwd_roofline"
 ```
 
 - 内联公式使用表达式语言书写，可以引用签名中的 index、构造参数与 `let`，以及 `present(t)`、`bytes(t)`（张量 `t` 的字节数）和内建 primitive。如果代价取决于某个张量是否传入，公式可以使用 `present(...)` 区分。
@@ -198,7 +198,7 @@ roofline:
 - 字节数表示算法的最少访存量：中间结果不计入，算法只读取一部分的输入按实际读取的不同元素计数；两者在每条 workload 行上相差不到 1% 时，可以按整个张量计。
 - 如果推导出的字节数与上述最少访存量不符，spec 需要显式写出 `bytes`，并附带相应的测试。
 - `flops` 是算法完成本次调用所需的最少算术量，不是硬件实际执行的指令数：已经算出的值按复用计；linear attention、状态空间扫描等循环 op，签名中带 chunk size 时按该 chunk size 的分块算法计，否则按逐 token 递推计；逐元素运算、attention 与 MoE 按设计文档 [Roofline 1.3](../../design/roofline.md#13-convention) 的约定计数；在本次调用的 dtype 上等同于恒等映射的路径计 0。
-- 公式需要 Python 逻辑时使用 `func`。它指向 `tileops.perf.formulas` 中的一个模块级函数 `f(call) -> tuple[int, int]`。函数只读取参数 `call`，不读取 op 实例。`call` 是一次经过检查的调用，提供以下接口：
+- 公式需要 Python 逻辑时使用 `func`。它指向 `tileops._perf.formulas` 中的一个模块级函数 `f(call) -> tuple[int, int]`。函数只读取参数 `call`，不读取 op 实例。`call` 是一次经过检查的调用，提供以下接口：
 
   **表 4** roofline `func` 的参数 `call`
 

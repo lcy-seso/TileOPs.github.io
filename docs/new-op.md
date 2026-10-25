@@ -10,13 +10,13 @@ the other five places are written from it.**{ .keystone }
 | # | File | Held to the spec by | Contents |
 | --- | --- | --- | --- |
 | 1 | [`src/tileops/manifest/spec/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/manifest/spec)`<family>.yaml` | the validator's `schema` and `signature` levels | the spec itself |
-| 2 | [`src/tileops/ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/ops)`<family>/…` | the validator, against `__init__`, `forward` and the declared kernels; the checks generated around every call | the op class, subclassing `Op` |
-| 2 | [`src/tileops/ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/ops)`<family>/__init__.py` and [`src/tileops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops)`<family>.py` | the validator: the family's `__all__` agrees with the manifest | the op's name, exported by its family and on the public path `tileops.<family>.<Op>` |
-| 3 | [`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels)`<family>/…` | — | the kernel classes, subclassing `Kernel` |
+| 2 | [`src/tileops/_ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_ops)`<family>/…` | the validator, against `__init__`, `forward` and the declared kernels; the checks generated around every call | the op class, subclassing `Op` |
+| 2 | [`src/tileops/_ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_ops)`<family>/__init__.py` and [`src/tileops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops)`<family>.py` | the validator: the family's `__all__` agrees with the manifest | the op's name, exported by its family and on the public path `tileops.<family>.<Op>` |
+| 3 | [`src/tileops/_kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_kernels)`<family>/…` | — | the kernel classes, subclassing `Kernel` |
 | 4 | [`tests/ops/`](https://github.com/tile-ai/TileOPs/tree/main/tests/ops)`test_<name>.py` | the contract tests, which run every workload row | the numerical comparison against the reference `ref_program` |
 | 5 | [`benchmarks/ops/`](https://github.com/tile-ai/TileOPs/tree/main/benchmarks/ops)`bench_<name>.py` | the validator's `bench` level | the benchmark, and the op's case entry in `benchmarks/_cases/` |
 
-The steps below take `GemmFwdOp`, the simplest matmul, through all six places.
+The steps below take `GEMMFwdOp`, the simplest matmul, through all six places.
 
 ## Step 1: write the spec
 
@@ -26,10 +26,10 @@ What each field means and how to write it is in
 yet. The checks that read code are skipped at this status, so they do not fail on the
 missing class.
 
-`GemmFwdOp`'s spec, with one workload row:
+`GEMMFwdOp`'s spec, with one workload row:
 
 ```yaml
-GemmFwdOp:
+GEMMFwdOp:
   ref_api: torch.matmul
   family: gemm
   status: spec-only
@@ -62,23 +62,25 @@ and is declared on the op class in step 2.
 
 ## Step 2: write the op class {#op-class}
 
-The op class subclasses [`Op`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/ops/op_base.py) and sits between the spec and the kernel. The checks
+The op class subclasses [`Op`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_ops/op_base.py) and sits between the spec and the kernel. The checks
 around every call (dtypes, shapes, the refinements and output shape inference) are
 generated from the signature when the class is defined, and the class writes none of
-them. What the class writes is how a call reaches a kernel.
+them. What the class writes is how a call reaches a kernel. Code outside TileOPs that
+subclasses `Op` imports `Op`, `Kernel`, `KernelInterface`, `CallSpec` and `Entry` from
+`tileops.authoring`.
 
 ### The class, and its members
 
-`GemmFwdOp`'s skeleton, with docstrings elided:
+`GEMMFwdOp`'s skeleton, with docstrings elided:
 
 ```python
-class GemmFwdOp(Op):
+class GEMMFwdOp(Op):
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
-        "gemm_tma": GemmTMAKernel,
-        "gemm_cp_async": GemmCpAsyncKernel,
+        "gemm_tma": GEMMTMAKernel,
+        "gemm_cp_async": GEMMCpAsyncKernel,
         "gemv": GemvKernel,
     }
-    interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {"gemm": GemmFwdInterface}
+    interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {"gemm": GEMMFwdInterface}
 
     def __init__(self, trans_a=False, trans_b=True, *, target=None):
         self.trans_a = trans_a
@@ -88,7 +90,7 @@ class GemmFwdOp(Op):
     def forward(self, a, b):                          # the generated checks have run
         a, b = a.contiguous(), b.contiguous()         # handed over as the spec declares it
         m, k = (a.shape[1], a.shape[0]) if self.trans_a else a.shape
-        call = GemmCall(                              # what this call is
+        call = GEMMCall(                              # what this call is
             m=m,
             n=b.shape[0] if self.trans_b else b.shape[1],
             k=k,
@@ -135,7 +137,7 @@ before is returned from the table, and otherwise the kernel is built and stored.
 `kernel_for` takes two arguments:
 
 - **`interface`**: a key of `interfaces`, naming one kernel call the op makes.
-  `GemmFwdOp` makes one kernel call, so it declares one interface, `"gemm"`. A second
+  `GEMMFwdOp` makes one kernel call, so it declares one interface, `"gemm"`. A second
   kernel interface is added only where the semantics or the call contract changes:
   `BatchNormFwdOp` has `batch_norm_fwd_train` and `batch_norm_fwd_infer`, which return
   different things. A kernel that is faster on some shape range or some architecture
@@ -150,7 +152,7 @@ The op calls the returned kernel with the parameters of the kernel interface's
 abstract `forward`, in that order.
 
 A kernel interface is a class in
-[`src/tileops/kernels/<family>/call_spec.py`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels),
+[`src/tileops/_kernels/<family>/call_spec.py`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_kernels),
 next to the call spec it names in `request`; a family with one kernel file keeps both
 in that file. Its name has the form `{Name}{Fwd|Bwd}Interface`, with variant words
 before the direction, and `interface-names-lint` checks it. Its abstract `forward` is
@@ -159,10 +161,10 @@ so its docstring states each tensor's shape, dtype, memory layout, device, and w
 it is written in place:
 
 ```python
-class GemmFwdInterface(KernelInterface):
+class GEMMFwdInterface(KernelInterface):
     """Dense matmul under the ``(trans_a, trans_b)`` layout the call states."""
 
-    request = GemmCall
+    request = GEMMCall
 
     @abstractmethod
     def forward(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -199,7 +201,7 @@ op is in [How a backend joins TileOPs](user-guide/dispatch/backends.md).
 
 Add the op's name to the imports and `__all__` in two places:
 
-1. its family's [`src/tileops/ops/<family>/__init__.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/ops), where the class is implemented;
+1. its family's [`src/tileops/_ops/<family>/__init__.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_ops), where the class is implemented;
 1. [`src/tileops/<family>.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops), the public path.
 
 Without the second, `from tileops.<family> import ...` does not find the op, and the
@@ -207,7 +209,7 @@ API reference does not include it.
 
 ## Step 3: write the kernel
 
-A kernel class subclasses [`Kernel`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/kernels/kernel_base.py) and the kernel interface it implements, lives under [`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels), is written in
+A kernel class subclasses [`Kernel`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_kernels/kernel_base.py) and the kernel interface it implements, lives under [`src/tileops/_kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_kernels), is written in
 TileLang. Construction obtains the TileLang builder; the program compiles the first
 time a call runs it with a given config. It implements `forward`, which the base
 class's `__call__` runs. Its constructor is called by the builder its own `entry_for`
@@ -218,11 +220,11 @@ The kernel is the only one of the six places the spec does not constrain: a kern
 neither reads the spec nor is checked against it.
 
 The split of arguments between the constructor and the call is a hard requirement:
-**only values compiled into the generated code go in the constructor.** `GemmTMAKernel`
+**only values compiled into the generated code go in the constructor.** `GEMMTMAKernel`
 splits them like this:
 
 ```python
-class GemmTMAKernel(Kernel, GemmFwdInterface):
+class GEMMTMAKernel(Kernel, GEMMFwdInterface):
     def __init__(self, m, n, k, dtype, config=None, trans_a=False, trans_b=False, ...):
         self.kernel = _gemm_kernel(m, n, k, trans_a, trans_b, self.dtype_str, ...)  # the TileLang builder
         self.init_config(config)            # tile sizes and pipeline depth
@@ -291,12 +293,12 @@ file calls both:
 import pytest
 
 from benchmarks import api as bench
-from tileops.ops import GemmFwdOp
+from tileops.gemm import GEMMFwdOp
 
 
-@pytest.mark.parametrize("case", bench.cases(GemmFwdOp), ids=lambda case: case.id)
+@pytest.mark.parametrize("case", bench.cases(GEMMFwdOp), ids=lambda case: case.id)
 def test_gemm_bench(case) -> None:
-    op = GemmFwdOp(**case.arguments)
+    op = GEMMFwdOp(**case.arguments)
     bench.Runner(op, case).compare({"torch-cublas": case.reference})
 ```
 
@@ -317,7 +319,7 @@ is in [How a benchmark is timed](timing.md).
 With the other five places written, run the three commands below to check the work:
 
 ```bash
-python scripts/validate_manifest.py --check-op GemmFwdOp   # spec and code agree
+python scripts/validate_manifest.py --check-op GEMMFwdOp   # spec and code agree
 python -m pytest tests/ops/test_gemm.py -v                # numerics match ref_program
 python -m pytest benchmarks/ops/bench_gemm.py             # the benchmark produces numbers
 ```

@@ -71,7 +71,7 @@ python -m pytest -q tests -m smoke
 ### kernel 的编译与缓存 { #compile }
 
 ```python
-op = GemmFwdOp()
+op = GEMMFwdOp()
 d = op(a, b)   # 首次调用：编译 kernel 并写入缓存
 d = op(a, b)   # 相同的调用：复用缓存
 ```
@@ -121,7 +121,7 @@ python -m pytest -q <bench-file>
 | `[Type][Scope] <description>` | `[BugFix][Elementwise] Build the floored tiers at every tuned fold width` |
 | `[Type][foundry][Scope] <description>` | `[Perf][foundry][Elementwise] Take the floored tier's reciprocal from one MUFU instruction` |
 
-- CI 检查 PR 标题的格式。`Type` 的取值定义在 [`.claude/conventions/types.sh`](https://github.com/tile-ai/TileOPs/blob/main/.claude/conventions/types.sh) 中。
+- CI 检查 PR 标题的格式。`Type` 的取值定义在 [`scripts/ci/types.sh`](https://github.com/tile-ai/TileOPs/blob/main/scripts/ci/types.sh) 中。
 - `foundry` 标记 kernel 由 [TileFoundry](https://github.com/tile-ai/TileFoundry) 生成的 PR。
 
 ### 描述 { #pr-body }

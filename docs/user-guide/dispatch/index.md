@@ -1,11 +1,11 @@
 # How an op selects a kernel
 
-A TileOPs op can have several kernels, and each kernel serves part of the op's calls. This guide describes how an op selects a kernel on a call, and what a developer writes to add a kernel. It is written for two readers: developers who add a kernel or an op to TileOPs, and authors of third-party backends who add kernels or take over a whole op. The reasons behind each design choice are in the design document [Op Interface Design § Kernel selection](../../design/ops-design.md#kernel-selection).
+A TileOPs op can have several kernels, and each kernel serves part of the op's calls. This guide describes how an op selects a kernel on a call, and what a developer writes to add a kernel. It is written for two readers: developers who add a kernel or an op to TileOPs, and authors of third-party backends who take over a whole op. The reasons behind each design choice are in the design document [Op Interface Design § Kernel selection](../../design/ops-design.md#kernel-selection).
 
 This page describes the selection process and its terms. The other two pages are:
 
 - [Adding a kernel to an op](writing.md): the two steps, the default rules, opening a new kernel interface, tests, and common errors;
-- [How a backend joins TileOPs](backends.md): `register_kernel_type` and targets.
+- [How a backend joins TileOPs](backends.md): replacing a whole op with a target.
 
 ## 1. Who selects the kernel: the op selects an interface, dispatch selects an implementation {#two-levels}
 
@@ -16,7 +16,7 @@ The op first selects a **kernel interface** by semantics. Dispatch then selects 
 | No. | Level | Decided by | Based on | Written in |
 | --- | --- | --- | --- | --- |
 | 1 | Select a kernel interface | the op | semantics, that is, where the call contracts differ, such as training versus inference | the op's `forward`, which names the interface when it calls `kernel_for` |
-| 2 | Select an implementation | dispatch, shared by all ops | the availability, applicability, and precedence each implementation declares | the selection algorithm is in `src/tileops/ops/op_base.py`; each implementation's declarations are on its own kernel class |
+| 2 | Select an implementation | dispatch, shared by all ops | the availability, applicability, and precedence each implementation declares | the selection algorithm is in `src/tileops/_ops/op_base.py`; each implementation's declarations are on its own kernel class |
 
 Take `BatchNormFwdOp` as an example. The op selects the interface `batch_norm_fwd_train` or `batch_norm_fwd_infer` by its construction argument `training`. The training interface has four implementations, and dispatch selects one of them by batch size, channel count, and spatial size.
 
@@ -25,9 +25,9 @@ Take `BatchNormFwdOp` as an example. The op selects the interface `batch_norm_fw
 On every call, the op builds a **call spec**, which records the facts of this call that affect selection and building. It then calls `self.kernel_for(interface, call)`:
 
 ```python
-# src/tileops/ops/norm/layer_norm.py
-call = LayerNormCall(device=x.device, n=math.prod(ns), eps=self.eps, dtype=x.dtype)
-return self.kernel_for("layer_norm", call)(x, weight, bias)
+# src/tileops/_ops/norm/layer_norm.py
+call = LayerNormCall(device=input.device, n=math.prod(ns), eps=self.eps, dtype=input.dtype)
+return self.kernel_for("layer_norm", call)(input, weight, bias)
 ```
 
 ![The path of one kernel_for call](img/call.svg)
@@ -45,18 +45,18 @@ When no key can run on the call's device type, the call raises `in-tree kernels 
 
 ## 3. Two things to do when adding a kernel {#hooks}
 
-To add a kernel to an existing kernel interface, TileOPs developers and backend authors both do the following two things:
+To add a kernel to an existing kernel interface, a TileOPs developer does the following two things:
 
 **Table 2** The two steps of adding a kernel
 
-| No. | Step | TileOPs developer | Backend author | Described in |
-| --- | --- | --- | --- | --- |
-| 1 | Register the implementation | the class subclasses the kernel interface and is added to the op's `kernel_types` | the class subclasses the kernel interface; call `register_kernel_type(op, key, cls)` | [Adding a kernel to an op § 1](writing.md#register) |
-| 2 | Declare which calls the implementation serves | write `refusal`; write `preferred_over` only when it overlaps another non-general implementation | same as the TileOPs developer | [Adding a kernel to an op § 2](writing.md#rule) |
+| No. | Step | What to write | Described in |
+| --- | --- | --- | --- |
+| 1 | Register the implementation | the class subclasses the kernel interface and is added to the op's `kernel_types` | [Adding a kernel to an op § 1](writing.md#register) |
+| 2 | Declare which calls the implementation serves | write `refusal`; write `preferred_over` only when it overlaps another non-general implementation | [Adding a kernel to an op § 2](writing.md#rule) |
 
 An implementation that declares none of `devices`, `supported_archs`, `refusal`, `general`, and `preferred_over` is available on CUDA devices of every architecture, serves every call, and has no precedence relation with other implementations. An interface with a single implementation therefore only needs the class to subclass the interface.
 
-A backend can also replace a whole op; see [How a backend joins TileOPs](backends.md).
+A backend does not add a single kernel; it replaces a whole op, see [How a backend joins TileOPs](backends.md).
 
 ## 4. Terms used in this guide {#terms}
 

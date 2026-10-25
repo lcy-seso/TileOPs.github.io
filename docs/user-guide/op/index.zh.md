@@ -139,7 +139,7 @@ op 实例构造一次，调用多次：
 | 3 | `serving_target` | 这个实例选定的 target | [构造与调用 § target 与实现表](lifecycle.md#target) |
 | 4 | `last_call`、`eval_roofline()` | 最近一次完成的调用，及其 `(flops, bytes)` | [调用记录与调优 § last_call](records.md#last-call) |
 | 5 | `request_tune()`、`kernel_config()` | 调优，及读取所用配置 | [调用记录与调优 § 调优](records.md#tune) |
-| 6 | `iter_kernels()`、`built_entries(interface)`、`held_delegates()` | 枚举已构造的 kernel、entry 与子 op | [调用记录与调优 § 枚举](records.md#enumerate) |
+| 6 | `iter_kernels()`、`_entries_built(interface)`、`_held_delegates()` | 枚举已构造的 kernel、entry 与子 op | [调用记录与调优 § 枚举](records.md#enumerate) |
 
 **表 5** 对内接口：op 子类声明或调用
 

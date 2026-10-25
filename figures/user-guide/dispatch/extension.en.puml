@@ -35,8 +35,6 @@ package "The op instance's in-tree implementation" {
   rectangle "The Op class's forward" as body <<dev>>
   package "Implementations of one kernel interface\n(installed at construction)" as snap {
     rectangle "Classes in kernel_types\ninheriting the interface" as intree <<dev>>
-    rectangle "register_kernel_type\nadds a key\n(every instance built afterwards)" as added <<ext>>
-    intree -[hidden]down- added
   }
 }
 
