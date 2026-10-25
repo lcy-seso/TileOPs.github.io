@@ -13,7 +13,7 @@
 
 ## 编写带追踪的 kernel { #write-a-traced-kernel }
 
-下面是一个完整的、接入了追踪的 warp specialization GEMM（示意用，单缓冲）。编号 `(1)`–`(7)` 的标记是仅有的与追踪相关的代码，各自的说明和 API 文档链接见代码下方。生产环境中的多 stage 版本见 [`src/tileops/kernels/gemm/dense.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/kernels/gemm/dense.py)。
+下面是一个完整的、接入了追踪的 warp specialization GEMM（示意用，单缓冲）。编号 `(1)`–`(7)` 的标记是仅有的与追踪相关的代码，各自的说明和 API 文档链接见代码下方。生产环境中的多 stage 版本见 [`src/tileops/_kernels/gemm/dense.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_kernels/gemm/dense.py)。
 
 ```{ .python .annotate }
 import functools
@@ -62,12 +62,12 @@ def build_gemm(m, n, k, dtype="float16", traced=False):
 ```
 
 1. 导入 trace 命名空间。下面的每个调用都是这个 `trace` 对象上的方法，完整说明见 [API 参考](../api/trace.md)。
-1. [`trace.out_idx(n_outputs, traced)`](../api/trace.md#tileops.trace.api._Trace.out_idx) 给出 `@tilelang.jit` 的 `out_idx`。只有 `traced` 时它才多出一个位置给末尾的 `slots` 输出，因此同一个构建函数在开启和关闭追踪时都能使用。
-1. [`trace.group(name, lead)`](../api/trace.md#tileops.trace.api._Trace.group) 声明由哪个 warpgroup 记录。`lead` 是被选出的写入线程（`tx == lead`）：计算仍在所有线程上执行，只有时间戳由 `lead` 写入。
-1. [`trace.range(name, lane)`](../api/trace.md#tileops.trace.api._Trace.range) 是一个 `with` 块，从进入计时到退出，在子行 `lane` 上画成一段条形。控制流放不进 `with` 时，用 [`trace.range_start`](../api/trace.md#tileops.trace.api._Trace.range_start) 与 [`trace.range_end`](../api/trace.md#tileops.trace.api._Trace.range_end)；只需要一个零宽度的时间点时，用 [`trace.record`](../api/trace.md#tileops.trace.api._Trace.record)。
+1. [`trace.out_idx(n_outputs, traced)`](../api/trace.md#tileops.trace._api._Trace.out_idx) 给出 `@tilelang.jit` 的 `out_idx`。只有 `traced` 时它才多出一个位置给末尾的 `slots` 输出，因此同一个构建函数在开启和关闭追踪时都能使用。
+1. [`trace.group(name, lead)`](../api/trace.md#tileops.trace._api._Trace.group) 声明由哪个 warpgroup 记录。`lead` 是被选出的写入线程（`tx == lead`）：计算仍在所有线程上执行，只有时间戳由 `lead` 写入。
+1. [`trace.range(name, lane)`](../api/trace.md#tileops.trace._api._Trace.range) 是一个 `with` 块，从进入计时到退出，在子行 `lane` 上画成一段条形。控制流放不进 `with` 时，用 [`trace.range_start`](../api/trace.md#tileops.trace._api._Trace.range_start) 与 [`trace.range_end`](../api/trace.md#tileops.trace._api._Trace.range_end)；只需要一个零宽度的时间点时，用 [`trace.record`](../api/trace.md#tileops.trace._api._Trace.record)。
 1. lane 的名字（`"tma"`、`"barrier"`、`"wgmma"`，以及默认的 `"main"`）就是时间线上的各行。
-1. [`trace.dag(src, dst)`](../api/trace.md#tileops.trace.api._Trace.dag) 声明从一个命名区间指向另一个区间的依赖箭头（`arrive` → `wait`），每出现一次画一条。
-1. [`trace.finalize(func, traced, max_events)`](../api/trace.md#tileops.trace.api._Trace.finalize) 在 `traced` 时 lower 标记并加上 `slots` 输出，否则把标记 strip 成零开销。`traced` **必须是构建函数缓存键的一部分**，这样同一形状下带追踪和不带追踪的两次构建才不会冲突。
+1. [`trace.dag(src, dst)`](../api/trace.md#tileops.trace._api._Trace.dag) 声明从一个命名区间指向另一个区间的依赖箭头（`arrive` → `wait`），每出现一次画一条。
+1. [`trace.finalize(func, traced, max_events)`](../api/trace.md#tileops.trace._api._Trace.finalize) 在 `traced` 时 lower 标记并加上 `slots` 输出，否则把标记 strip 成零开销。`traced` **必须是构建函数缓存键的一部分**，这样同一形状下带追踪和不带追踪的两次构建才不会冲突。
 
 ## 运行带追踪的 kernel { #running-a-traced-kernel }
 
@@ -80,8 +80,8 @@ def forward(self, a, b):
     return trace.run(compiled, (a, b), stem="gemm_128x256x512")  # (2)!
 ```
 
-1. 按开关构建对应的 kernel：[`trace.enabled`](../api/trace.md#tileops.trace.api._Trace.enabled) 决定选用带追踪的版本还是 strip 后的版本，它也是标记 `(7)` 所说的缓存键的一部分。
-1. [`trace.run(compiled, inputs, stem=...)`](../api/trace.md#tileops.trace.api._Trace.run) 运行 kernel。带追踪构建的 kernel，末尾的 `slots` 总会被拆出来；开启追踪时，它被解码并写进 `debug/<stem>.html`，每次调用都生成一个不会重名的新文件。它内部由 [`decode`](../api/trace.md#tileops.trace.api._Trace.decode) 和 [`dump`](../api/trace.md#tileops.trace.api._Trace.dump) 组成，两者也可以直接调用。
+1. 按开关构建对应的 kernel：[`trace.enabled`](../api/trace.md#tileops.trace._api._Trace.enabled) 决定选用带追踪的版本还是 strip 后的版本，它也是标记 `(7)` 所说的缓存键的一部分。
+1. [`trace.run(compiled, inputs, stem=...)`](../api/trace.md#tileops.trace._api._Trace.run) 运行 kernel。带追踪构建的 kernel，末尾的 `slots` 总会被拆出来；开启追踪时，它被解码并写进 `debug/<stem>.html`，每次调用都生成一个不会重名的新文件。它内部由 [`decode`](../api/trace.md#tileops.trace._api._Trace.decode) 和 [`dump`](../api/trace.md#tileops.trace._api._Trace.dump) 组成，两者也可以直接调用。
 
 ## 开启追踪 { #enabling-tracing }
 
@@ -94,7 +94,7 @@ trace.enable()  # (1)!
 c = op(a, b)  # (2)!
 ```
 
-1. [`trace.enable(output="debug")`](../api/trace.md#tileops.trace.api._Trace.enable) 打开追踪，并指定输出目录，默认是 `debug/`（已被 gitignore）。这个开关只在当前进程内有效：不读取环境变量，也不对 `tilelang` 做 monkeypatch。相关的还有 [`trace.disable()`](../api/trace.md#tileops.trace.api._Trace.disable)、[`trace.enabled`](../api/trace.md#tileops.trace.api._Trace.enabled) 与 [`trace.output`](../api/trace.md#tileops.trace.api._Trace.output)。
+1. [`trace.enable(output="debug")`](../api/trace.md#tileops.trace._api._Trace.enable) 打开追踪，并指定输出目录，默认是 `debug/`（已被 gitignore）。这个开关只在当前进程内有效：不读取环境变量，也不对 `tilelang` 做 monkeypatch。相关的还有 [`trace.disable()`](../api/trace.md#tileops.trace._api._Trace.disable)、[`trace.enabled`](../api/trace.md#tileops.trace._api._Trace.enabled) 与 [`trace.output`](../api/trace.md#tileops.trace._api._Trace.output)。
 1. 此后运行的每个带追踪的 kernel 都会写出 `debug/<stem>.html`。
 
 在 pytest 中，`--trace-kernel` 会在任何 kernel 构建之前，由 `pytest_configure` 调用 `trace.enable()`：

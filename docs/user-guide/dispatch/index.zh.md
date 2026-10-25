@@ -1,11 +1,11 @@
 # op 如何选择 kernel
 
-一个 TileOPs op 可以有多个 kernel，每个 kernel 服务一部分调用。本指南说明 op 在一次调用中如何选中 kernel，以及新增一个 kernel 要写什么。本指南面向两类读者：在 TileOPs 中新增 kernel 或 op 的开发者，以及为第三方 backend 新增 kernel 或接管整个 op 的作者。各项设计的理由见设计文档 [Op Interface Design § Kernel selection](../../design/ops-design.md#kernel-selection)。
+一个 TileOPs op 可以有多个 kernel，每个 kernel 服务一部分调用。本指南说明 op 在一次调用中如何选中 kernel，以及新增一个 kernel 要写什么。本指南面向两类读者：在 TileOPs 中新增 kernel 或 op 的开发者，以及用第三方 backend 接管整个 op 的作者。各项设计的理由见设计文档 [Op Interface Design § Kernel selection](../../design/ops-design.md#kernel-selection)。
 
 本页说明选择的过程与术语，另外两页分别是：
 
 - [如何为 op 新增 kernel](writing.md)：两步的写法、默认规则、新开 kernel 接口、测试与常见报错；
-- [backend 如何接入 TileOPs](backends.md)：`register_kernel_type` 与 target。
+- [backend 如何接入 TileOPs](backends.md)：用 target 替换整个 op。
 
 ## 1. 谁来选 kernel：op 选接口，派发机制选实现 {#two-levels}
 
@@ -16,7 +16,7 @@ op 先按语义选定一个 **kernel 接口**，派发机制再按调用的 shap
 | No. | 层 | 由谁决定 | 依据 | 写在哪里 |
 | --- | --- | --- | --- | --- |
 | 1 | 选 kernel 接口 | op | 语义，即调用契约不同之处，例如训练与推理 | op 的 `forward`，调用 `kernel_for` 时给出接口名 |
-| 2 | 选实现 | 派发机制，所有 op 共用 | 每个实现声明的可用性、适用范围与优先关系 | 选择算法在 `src/tileops/ops/op_base.py`；各实现的声明写在自己的 kernel 类上 |
+| 2 | 选实现 | 派发机制，所有 op 共用 | 每个实现声明的可用性、适用范围与优先关系 | 选择算法在 `src/tileops/_ops/op_base.py`；各实现的声明写在自己的 kernel 类上 |
 
 以 `BatchNormFwdOp` 为例：op 按构造参数 `training` 选择接口 `batch_norm_fwd_train` 或 `batch_norm_fwd_infer`；训练接口有四个实现，派发机制按 batch、channel 数与空间尺寸选中其中一个。
 
@@ -25,9 +25,9 @@ op 先按语义选定一个 **kernel 接口**，派发机制再按调用的 shap
 op 每次调用构造一个 **call spec**，它记录这次调用中影响选择与构建的事实，然后调用 `self.kernel_for(interface, call)`：
 
 ```python
-# src/tileops/ops/norm/layer_norm.py
-call = LayerNormCall(device=x.device, n=math.prod(ns), eps=self.eps, dtype=x.dtype)
-return self.kernel_for("layer_norm", call)(x, weight, bias)
+# src/tileops/_ops/norm/layer_norm.py
+call = LayerNormCall(device=input.device, n=math.prod(ns), eps=self.eps, dtype=input.dtype)
+return self.kernel_for("layer_norm", call)(input, weight, bias)
 ```
 
 ![一次 kernel_for 调用的路径](img/call.svg)
@@ -45,18 +45,18 @@ return self.kernel_for("layer_norm", call)(x, weight, bias)
 
 ## 3. 新增一个 kernel 要做的两件事 {#hooks}
 
-为已有的 kernel 接口新增一个 kernel，TileOPs 开发者与 backend 作者都做以下两件事：
+TileOPs 开发者为已有的 kernel 接口新增一个 kernel，做以下两件事：
 
 **表 2** 新增一个 kernel 的两步
 
-| No. | 步骤 | TileOPs 开发者 | backend 作者 | 说明所在 |
-| --- | --- | --- | --- | --- |
-| 1 | 登记实现 | 类继承 kernel 接口，加入 op 的 `kernel_types` | 类继承 kernel 接口，调用 `register_kernel_type(op, key, cls)` | [新增 kernel 1](writing.md#register) |
-| 2 | 声明实现服务哪些调用 | 写 `refusal`；只在与另一个非 general 实现重叠时写 `preferred_over` | 同左 | [新增 kernel 2](writing.md#rule) |
+| No. | 步骤 | 做法 | 说明所在 |
+| --- | --- | --- | --- |
+| 1 | 登记实现 | 类继承 kernel 接口，加入 op 的 `kernel_types` | [新增 kernel 1](writing.md#register) |
+| 2 | 声明实现服务哪些调用 | 写 `refusal`；只在与另一个非 general 实现重叠时写 `preferred_over` | [新增 kernel 2](writing.md#rule) |
 
 实现不声明 `devices`、`supported_archs`、`refusal`、`general` 与 `preferred_over` 时，默认在所有架构的 CUDA 设备上可用，服务全部调用，与其他实现没有优先关系。只有一个实现的接口因此只需继承接口。
 
-backend 还可以替换整个 op，见 [backend 如何接入 TileOPs](backends.md)。
+backend 不新增单个 kernel，而是替换整个 op，见 [backend 如何接入 TileOPs](backends.md)。
 
 ## 4. 本指南使用的术语 {#terms}
 

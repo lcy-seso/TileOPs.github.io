@@ -76,14 +76,14 @@ adts:
   MGroupedLayout:
     sum:
       contiguous:
-        python: tileops.ops.moe.contracts.ContiguousLayoutSpec
+        python: tileops._ops.moe.contracts.ContiguousLayoutSpec
         fields:
-          packing: {type: "'tight' | 'aligned'", python: tileops.ops.moe.contracts.ContiguousPacking}
-          metadata_kind: {type: "'physical_psum' | 'per_row'", python: tileops.ops.moe.contracts.ContiguousMetadata}
+          packing: {type: "'tight' | 'aligned'", python: tileops._ops.moe.contracts.ContiguousPacking}
+          metadata_kind: {type: "'physical_psum' | 'per_row'", python: tileops._ops.moe.contracts.ContiguousMetadata}
           alignment: Dim
         invariant: "(packing == 'tight') == (alignment == 1) and alignment >= 1"
       masked:
-        python: tileops.ops.moe.contracts.MaskedLayoutSpec
+        python: tileops._ops.moe.contracts.MaskedLayoutSpec
         fields: {max_m: Dim}
 ```
 
@@ -138,7 +138,7 @@ An op without effect declarations only reads its inputs and allocates new tensor
 
 | No. | Declaration | Meaning | Example |
 | --- | --- | --- | --- |
-| 1 | `buffer: out` on an output | `forward` gets a parameter `out` after all inputs. When the caller passes `out`, the op writes the result into it and returns it; otherwise the op allocates a new tensor. `out` has the same shape and dtype as that output | `output` of MoEGroupedGemm |
+| 1 | `buffer: out` on an output | `forward` gets a parameter `out` after all inputs. When the caller passes `out`, the op writes the result into it and returns it; otherwise the op allocates a new tensor. `out` has the same shape and dtype as that output | `output` of MoEGroupedGEMM |
 | 2 | `mutated: true` on an input | the op may write this input, and its contents before the call take part in the computation | |
 | 3 | `mutated: true` and `write_only: true` on an input | a result buffer that must be passed: the op overwrites it, and the result depends only on the other inputs; if the op returns `None`, `outputs` is empty | `output` of FusedMoEExperts |
 | 4 | `mutated: "<discriminant expression>"` on an input | the op writes this input only when the expression is true | `mutated: inplace` of activation functions |
@@ -171,26 +171,26 @@ Varlen, paged and similar ops use metadata tensors such as `cu_seqlens` and `blo
 ```yaml
 forall: {B: Dim, S: Dim, H: Dim, D: Dim, NS: Dim, NC: Dim, T: "DType[...]", seq_lens: "Seq[Int]"}
 inputs:
-  offsets: {dtype: int32, optional: true, shape: "[NS + 1]",
-            values: "prefix_sum(seq_lens)", requires: ["prefix_offsets(S)"]}
-  indices: {dtype: int32, optional: "present(offsets)", shape: "[NC, 2]",
-            values: "chunk_indices(seq_lens, chunk_size)"}
+  cu_seqlens: {dtype: int32, optional: true, shape: "[NS + 1]",
+               values: "prefix_sum(seq_lens)", requires: ["prefix_offsets(S)"]}
+  chunk_indices: {dtype: int32, optional: "present(cu_seqlens)", shape: "[NC, 2]",
+                  values: "chunk_indices(seq_lens, chunk_size)"}
 ```
 
 The rules for generators:
 
 - The arguments of a generator are given by the workload row, for example the list of lengths `seq_lens`. A name of kind `Seq[Int]` in `forall` can be used only as a generator argument. A `Seq[Int]` in a workload row can be written as a list of integers or as a call to a value primitive that returns a list, for example `seq_lens: "repeat(512, 64)"`.
-- At instantiation, the generator's result is unified with the declared shape, which solves the other indices in the shape, so they are not given in the row. In the example above, `NS` and `NC` are solved from the generated `offsets` and `indices` respectively. In an actual call, these indices are likewise solved from the input tensors.
+- At instantiation, the generator's result is unified with the declared shape, which solves the other indices in the shape, so they are not given in the row. In the example above, `NS` and `NC` are solved from the generated `cu_seqlens` and `chunk_indices` respectively. In an actual call, these indices are likewise solved from the input tensors.
 - A generator is either deterministic or uses private random numbers derived from the workload seed, so the same row generates the same values every time.
 - The rank of each generator result is fixed, or determined by its shape arguments.
 - A generated tensor declares an integer dtype (`int32` or `int64`). When an argument is outside its domain, or the result is outside the range of the declared dtype, the generator raises an error.
-- A generator argument can be a primitive that returns a list, for example `as_tensor(balanced_sizes(M, G))` in GroupedGemm.
+- A generator argument can be a primitive that returns a list, for example `as_tensor(balanced_sizes(M, G))` in GroupedGEMM.
 
 The rules for `requires`:
 
 - `requires` lists predicates that constrain the contents of a metadata tensor. For example, `prefix_offsets(S)` requires the tensor's first element to be 0, the elements to be non-decreasing, and the last element to be `S`. The contents of the constrained tensor are the predicate's implicit first argument.
 - Each predicate reads the constrained tensor at a fixed rank; predicates that give elementwise bounds (such as `in_range`) can apply to tensors of any rank.
-- A predicate argument can be another metadata tensor, so that one predicate constrains the relation between two tensors. For example, `batch_offsets` in GroupedGemm declares `requires: ["exclusive_prefix_of(batch_sizes)"]`, which requires it to be the exclusive prefix sum of `batch_sizes`. On every branch where the constrained tensor exists, the tensor used as the argument must also exist.
+- A predicate argument can be another metadata tensor, so that one predicate constrains the relation between two tensors. For example, `batch_offsets` in GroupedGEMM declares `requires: ["exclusive_prefix_of(batch_sizes)"]`, which requires it to be the exclusive prefix sum of `batch_sizes`. On every branch where the constrained tensor exists, the tensor used as the argument must also exist.
 - The validator checks `requires` at instantiation against the generated values. In an actual call, the caller guarantees these constraints and the op does not check tensor contents; the validator therefore also checks that the predicate is well defined on every branch where the constrained tensor exists.
 - A tensor that declares `requires` must also declare `values`.
 

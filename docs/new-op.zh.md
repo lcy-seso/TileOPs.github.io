@@ -7,22 +7,22 @@ spec 最先编写，因为后面五个文件的内容都由 spec 决定，最后
 | # | 文件 | 由谁对照 spec 检查 | 内容 |
 | --- | --- | --- | --- |
 | 1 | [`src/tileops/manifest/spec/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/manifest/spec)`<family>.yaml` | 校验器的 `schema` 与 `signature` 两级 | spec 本身 |
-| 2 | [`src/tileops/ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/ops)`<family>/…` | 校验器对照 `__init__`、`forward` 与声明的 kernel；每次调用前后生成的检查 | op 类，继承 `Op` |
-| 2 | [`src/tileops/ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/ops)`<family>/__init__.py` 与 [`src/tileops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops)`<family>.py` | 校验器：family 的 `__all__` 与 manifest 一致 | op 名，由所属 family 导出，并出现在公开路径 `tileops.<family>.<Op>` 上 |
-| 3 | [`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels)`<family>/…` | —— | kernel 类，继承 `Kernel` |
+| 2 | [`src/tileops/_ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_ops)`<family>/…` | 校验器对照 `__init__`、`forward` 与声明的 kernel；每次调用前后生成的检查 | op 类，继承 `Op` |
+| 2 | [`src/tileops/_ops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_ops)`<family>/__init__.py` 与 [`src/tileops/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops)`<family>.py` | 校验器：family 的 `__all__` 与 manifest 一致 | op 名，由所属 family 导出，并出现在公开路径 `tileops.<family>.<Op>` 上 |
+| 3 | [`src/tileops/_kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_kernels)`<family>/…` | —— | kernel 类，继承 `Kernel` |
 | 4 | [`tests/ops/`](https://github.com/tile-ai/TileOPs/tree/main/tests/ops)`test_<名字>.py` | 契约测试，逐个运行每个 workload 行 | 与参考实现 `ref_program` 的数值比对 |
 | 5 | [`benchmarks/ops/`](https://github.com/tile-ai/TileOPs/tree/main/benchmarks/ops)`bench_<名字>.py` | 校验器的 `bench` 级 | benchmark，以及该 op 在 `benchmarks/_cases/` 中的 case 注册项 |
 
-下文以最简单的矩阵乘 `GemmFwdOp` 为例，依次说明这六处。
+下文以最简单的矩阵乘 `GEMMFwdOp` 为例，依次说明这六处。
 
 ## 第一步：写 spec
 
 spec 各字段的含义与写法见[读写 manifest](user-guide/manifest/index.md)。新 op 的 spec 先写成 `status: spec-only`，表示接口已经确定、实现尚未完成。此时所有需要读取代码的检查都会跳过，不会因为找不到类而报错。
 
-`GemmFwdOp` 的 spec 只列出一行 workload：
+`GEMMFwdOp` 的 spec 只列出一行 workload：
 
 ```yaml
-GemmFwdOp:
+GEMMFwdOp:
   ref_api: torch.matmul
   family: gemm
   status: spec-only
@@ -54,20 +54,20 @@ spec 不写文件路径，也不写 kernel。由哪些 kernel 服务这个 op �
 
 ## 第二步：写 op 类 {#op-class}
 
-op 类继承 [`Op`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/ops/op_base.py)，位于 spec 与 kernel 之间。每次调用前后的检查，包括 dtype、形状、约束与输出形状推导，都在类定义时依照签名生成，op 类不手写其中任何一项。op 类需要编写的是一次调用如何到达 kernel。
+op 类继承 [`Op`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_ops/op_base.py)，位于 spec 与 kernel 之间。每次调用前后的检查，包括 dtype、形状、约束与输出形状推导，都在类定义时依照签名生成，op 类不手写其中任何一项。op 类需要编写的是一次调用如何到达 kernel。TileOPs 之外继承 `Op` 的代码从 `tileops.authoring` 导入 `Op`、`Kernel`、`KernelInterface`、`CallSpec` 与 `Entry`。
 
 ### 类的骨架与成员
 
-`GemmFwdOp` 的骨架如下，略去 docstring：
+`GEMMFwdOp` 的骨架如下，略去 docstring：
 
 ```python
-class GemmFwdOp(Op):
+class GEMMFwdOp(Op):
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
-        "gemm_tma": GemmTMAKernel,
-        "gemm_cp_async": GemmCpAsyncKernel,
+        "gemm_tma": GEMMTMAKernel,
+        "gemm_cp_async": GEMMCpAsyncKernel,
         "gemv": GemvKernel,
     }
-    interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {"gemm": GemmFwdInterface}
+    interfaces: ClassVar[Mapping[str, type[KernelInterface]]] = {"gemm": GEMMFwdInterface}
 
     def __init__(self, trans_a=False, trans_b=True, *, target=None):
         self.trans_a = trans_a
@@ -77,7 +77,7 @@ class GemmFwdOp(Op):
     def forward(self, a, b):                          # the generated checks have run
         a, b = a.contiguous(), b.contiguous()         # handed over as the spec declares it
         m, k = (a.shape[1], a.shape[0]) if self.trans_a else a.shape
-        call = GemmCall(                              # what this call is
+        call = GEMMCall(                              # what this call is
             m=m,
             n=b.shape[0] if self.trans_b else b.shape[1],
             k=k,
@@ -112,18 +112,18 @@ kernel 是编译产物，构造一次需要几百毫秒到几秒，而一个 op 
 
 `kernel_for` 接受两个参数：
 
-- **`interface`**：`interfaces` 的一个 key，指 op 发出的某一个 kernel 调用。`GemmFwdOp` 只发出一个 kernel 调用，因此只声明一个 `"gemm"`。只有语义或调用契约改变时才新增一个 kernel 接口，例如 `BatchNormFwdOp` 的 `batch_norm_fwd_train` 与 `batch_norm_fwd_infer` 返回的内容不同。在某个形状范围或某个架构上更快的 kernel 是已有 kernel 接口的另一个实现。
+- **`interface`**：`interfaces` 的一个 key，指 op 发出的某一个 kernel 调用。`GEMMFwdOp` 只发出一个 kernel 调用，因此只声明一个 `"gemm"`。只有语义或调用契约改变时才新增一个 kernel 接口，例如 `BatchNormFwdOp` 的 `batch_norm_fwd_train` 与 `batch_norm_fwd_infer` 返回的内容不同。在某个形状范围或某个架构上更快的 kernel 是已有 kernel 接口的另一个实现。
 - **`call`**：一个冻结的 `CallSpec` 子类，包含选择实现和构造 kernel 所需的信息，即形状、dtype、op 的语义参数与设备。它必须是这个 kernel 接口的 `request` 指定的类型。设备事实（`arch`、`sm_count`、`calibration`、`smem_budget`）由派发机制在缓存未命中时从 `call.device` 推出，调用方不填写。
 
 op 按 kernel 接口的抽象 `forward` 方法所声明的参数及其顺序调用取得的 kernel。
 
-kernel 接口是写在 [`src/tileops/kernels/<family>/call_spec.py`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels) 中的一个类，与它在 `request` 中指定的 call spec 放在一起；只有一个 kernel 文件的 family 把两者都写在那个文件中。类名的格式是 `{Name}{Fwd|Bwd}Interface`，表示变体的词写在方向之前，由 `interface-names-lint` 检查。kernel 接口的抽象 `forward` 是所有实现（in-tree 实现与 backend 提供的实现）共同依据的唯一契约，因此它的 docstring 写明每个张量的形状、dtype、内存布局、设备，以及是否被原地写入：
+kernel 接口是写在 [`src/tileops/_kernels/<family>/call_spec.py`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_kernels) 中的一个类，与它在 `request` 中指定的 call spec 放在一起；只有一个 kernel 文件的 family 把两者都写在那个文件中。类名的格式是 `{Name}{Fwd|Bwd}Interface`，表示变体的词写在方向之前，由 `interface-names-lint` 检查。kernel 接口的抽象 `forward` 是所有实现（in-tree 实现与 backend 提供的实现）共同依据的唯一契约，因此它的 docstring 写明每个张量的形状、dtype、内存布局、设备，以及是否被原地写入：
 
 ```python
-class GemmFwdInterface(KernelInterface):
+class GEMMFwdInterface(KernelInterface):
     """Dense matmul under the ``(trans_a, trans_b)`` layout the call states."""
 
-    request = GemmCall
+    request = GEMMCall
 
     @abstractmethod
     def forward(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -149,21 +149,21 @@ op 不编写 `entry_for`，也不自行维护 kernel 缓存。完全没有 in-tr
 
 op 名需要加入两处的导入与 `__all__`：
 
-1. 所属 family 的 [`src/tileops/ops/<family>/__init__.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/ops)，即类的实现位置；
+1. 所属 family 的 [`src/tileops/_ops/<family>/__init__.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_ops)，即类的实现位置；
 1. [`src/tileops/<family>.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops)，即公开路径。
 
 缺少后者时，`from tileops.<family> import ...` 无法导入这个 op，API 参考也不会收录它。
 
 ## 第三步：写 kernel
 
-kernel 类继承 [`Kernel`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/kernels/kernel_base.py) 与它实现的 kernel 接口，放在 [`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels) 下，用 TileLang 编写：构造时取得 TileLang 构建函数，程序在首次以某个配置调用时编译。kernel 类实现 `forward`，由基类的 `__call__` 调用。构造函数由本类 `entry_for` 返回的 builder 调用；`forward` 接受 kernel 接口规定的参数，也就是第二步中的 `kernel(a, b)`。
+kernel 类继承 [`Kernel`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_kernels/kernel_base.py) 与它实现的 kernel 接口，放在 [`src/tileops/_kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_kernels) 下，用 TileLang 编写：构造时取得 TileLang 构建函数，程序在首次以某个配置调用时编译。kernel 类实现 `forward`，由基类的 `__call__` 调用。构造函数由本类 `entry_for` 返回的 builder 调用；`forward` 接受 kernel 接口规定的参数，也就是第二步中的 `kernel(a, b)`。
 
 kernel 是这六处中唯一不受 spec 约束的一处：kernel 不读取 spec，也不对照 spec 检查。
 
-构造参数与调用参数的划分有一条硬性要求：**只有会被编译进生成代码的值才作为构造参数。** `GemmTMAKernel` 的划分如下：
+构造参数与调用参数的划分有一条硬性要求：**只有会被编译进生成代码的值才作为构造参数。** `GEMMTMAKernel` 的划分如下：
 
 ```python
-class GemmTMAKernel(Kernel, GemmFwdInterface):
+class GEMMTMAKernel(Kernel, GEMMFwdInterface):
     def __init__(self, m, n, k, dtype, config=None, trans_a=False, trans_b=False, ...):
         self.kernel = _gemm_kernel(m, n, k, trans_a, trans_b, self.dtype_str, ...)  # the TileLang builder
         self.init_config(config)            # tile sizes and pipeline depth
@@ -211,12 +211,12 @@ benchmark 放在 [`benchmarks/ops/`](https://github.com/tile-ai/TileOPs/tree/mai
 import pytest
 
 from benchmarks import api as bench
-from tileops.ops import GemmFwdOp
+from tileops.gemm import GEMMFwdOp
 
 
-@pytest.mark.parametrize("case", bench.cases(GemmFwdOp), ids=lambda case: case.id)
+@pytest.mark.parametrize("case", bench.cases(GEMMFwdOp), ids=lambda case: case.id)
 def test_gemm_bench(case) -> None:
-    op = GemmFwdOp(**case.arguments)
+    op = GEMMFwdOp(**case.arguments)
     bench.Runner(op, case).compare({"torch-cublas": case.reference})
 ```
 
@@ -229,7 +229,7 @@ benchmark 至少还需要记录一个非 TileOPs 的实现，否则这一行没�
 上述五处都写完之后，先运行以下三条命令自查：
 
 ```bash
-python scripts/validate_manifest.py --check-op GemmFwdOp   # spec and code agree
+python scripts/validate_manifest.py --check-op GEMMFwdOp   # spec and code agree
 python -m pytest tests/ops/test_gemm.py -v                # numerics match ref_program
 python -m pytest benchmarks/ops/bench_gemm.py             # the benchmark produces numbers
 ```

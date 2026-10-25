@@ -32,12 +32,12 @@ to the call, and the specialized kernel is compiled and cached on the first call
 
 ```python
 import torch
-from tileops.gemm import GemmFwdOp
+from tileops.gemm import GEMMFwdOp
 
 a = torch.randn(4096, 4096, device="cuda", dtype=torch.float16)
 b = torch.randn(4096, 4096, device="cuda", dtype=torch.float16)
 
-op = GemmFwdOp()                        # NT by default: a=[M, K], b=[N, K]
+op = GEMMFwdOp()                        # NT by default: a=[M, K], b=[N, K]
 d = op(a, b)                         # -> [M, N]
 flops, nbytes = op.eval_roofline()   # what the call had to do and move
 ```

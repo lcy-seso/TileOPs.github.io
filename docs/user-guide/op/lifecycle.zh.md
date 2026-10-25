@@ -112,14 +112,7 @@
 
 ## 4. target 与实现表 {#target}
 
-backend 接入 TileOPs 有两种方式，接入方法见 [backend 如何接入 TileOPs](../dispatch/backends.md#choose)。本节说明基类如何处理它们。
-
-**表 4** backend 接入的两种方式
-
-| No. | 方式 | 接管的范围 | 基类何时处理 |
-| --- | --- | --- | --- |
-| 1 | `target` | 整个 op | 调用的第 4 步选定，之后不再改变 |
-| 2 | `register_kernel_type` | 为一个 kernel 接口新增一个实现，按它自己声明的适用范围与优先关系参与选择 | 构造时由 `Op.__init__` 并入实现表 |
+backend 通过 target 接管整个 op，接入方法见 [backend 如何接入 TileOPs](../dispatch/backends.md#choose)。本节说明基类如何处理它：target 在调用的第 4 步选定，之后不再改变。
 
 ### 选择 target {#select-target}
 
@@ -192,7 +185,7 @@ target 被调用前，生成的检查已经运行，基类保证以下三点：
 
 一个 kernel type 按 identity 构造出多个 entry。以 `RMSNormOnChipKernel` 为例：
 
-**表 5** kernel type 与 entry
+**表 4** kernel type 与 entry
 
 | No. | | kernel type | entry |
 | --- | --- | --- | --- |
@@ -203,7 +196,7 @@ target 被调用前，生成的检查已经运行，基类保证以下三点：
 | 5 | 保存在 | `kernel_types`、`_installed_kernel_types` | `_built_entries` |
 | 6 | 用途 | 基类据此选择这次调用的实现 | 子类调用它：`entry(x, weight)` |
 
-`register_kernel_type` 向候选中加入一个 kernel type，不构造任何 entry；`register_kernel_builder` 登记的 builder 直接构造 target 的 kernel，不经过 kernel type 的选择，见[第 4 节](#target)。
+`register_kernel_builder` 登记的 builder 直接构造 target 的 kernel，不经过 kernel type 的选择，见[第 4 节](#target)。
 
 子类通过 `self.kernel_for(interface, call)` 取得 kernel：
 
@@ -249,7 +242,7 @@ target 被调用前，生成的检查已经运行，基类保证以下三点：
 
 处理之后，绑定组回到尚未选定 target 的状态；已完成调用的记录和持有的子 op 保留。下一次调用重新选择 target。
 
-**表 6** 失败后的实例状态
+**表 5** 失败后的实例状态
 
 | No. | 情况 | target | 已构造的 kernel | `last_call` |
 | --- | --- | --- | --- | --- |

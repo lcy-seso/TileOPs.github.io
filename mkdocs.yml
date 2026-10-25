@@ -106,7 +106,6 @@ nav:
   # an op against it, then how an op is accepted.
   - Design:
     - design/index.md
-    - Architecture: design/architecture.md
     - Layer Boundaries: design/layer-boundaries.md
     - Manifest: design/manifest.md
     - Op Interfaces: design/ops-design.md
@@ -204,7 +203,6 @@ plugins:
             Writing Benchmarks: 编写 benchmark
             Using torch.compile: 接入 torch.compile
             Adding a Backend: 接入新硬件 backend
-            Architecture: 架构
             Manifest: manifest 规范
             Op Interfaces: op 接口
             Op Interface Reference: op 接口参考

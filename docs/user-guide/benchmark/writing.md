@@ -34,12 +34,12 @@ This example compares TileOps batched matmul with vLLM, SGLang, and PyTorch/cuBL
 import pytest
 
 from benchmarks import api as bench
-from tileops.ops import BmmFwdOp
+from tileops.gemm import BMMFwdOp
 
 
-@pytest.mark.parametrize("case", bench.cases(BmmFwdOp), ids=lambda case: case.id)
+@pytest.mark.parametrize("case", bench.cases(BMMFwdOp), ids=lambda case: case.id)
 def test_bmm_bench(case, vllm_bmm, sglang_bmm):
-    op = BmmFwdOp(**case.arguments)
+    op = BMMFwdOp(**case.arguments)
 
     bench.Runner(op, case).compare(
         {
@@ -52,7 +52,7 @@ def test_bmm_bench(case, vllm_bmm, sglang_bmm):
 
 Here is how the example works:
 
-- `bench.cases(BmmFwdOp)` creates a case for each dtype case of every manifest workload
+- `bench.cases(BMMFwdOp)` creates a case for each dtype case of every manifest workload
   row. The `case.id` also serves as the pytest test ID.
 - `case.arguments` supplies the arguments used to construct the op.
 - `vllm_bmm` and `sglang_bmm` are callables that accept the same inputs as the op.
@@ -82,8 +82,8 @@ just one line. Here is an excerpt from `_cases/gemm.py`:
 
 ```python
 ENTRIES = {
-    "BmmFwdOp": Entry(BmmWorkload.from_call),
-    "GemmFwdOp": Entry(GemmWorkload.from_call),
+    "BMMFwdOp": Entry(BMMWorkload.from_call),
+    "GEMMFwdOp": Entry(GEMMWorkload.from_call),
 }
 ```
 

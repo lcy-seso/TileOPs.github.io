@@ -119,7 +119,7 @@ tracing, graph breaks and guards it refers to are described in
 
 `RMSNormFwdOp`'s skeleton, with docstrings elided; the
 full file is
-[`src/tileops/ops/norm/rms_norm.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/ops/norm/rms_norm.py):
+[`src/tileops/_ops/norm/rms_norm.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_ops/norm/rms_norm.py):
 
 ```python
 class RMSNormFwdOp(Op):

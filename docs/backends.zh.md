@@ -25,14 +25,9 @@ TileLang 是支持多种 backend 的 DSL，每种硬件各有一套独立的 ker
 - 调用方可用的接口；
 - 刻意不支持的情形。
 
-## 两种接入方式 {#two-ways}
+## 接入方式 {#extend}
 
-一个仓库之外的包按自己接管的范围，从两种方式中选一种：
-
-1. `register_kernel_type`：为一个 kernel 接口新增一个实现，与 in-tree 实现一起参与选择；
-2. target：接管 op 的全部调用。
-
-第一种方式写出的 kernel 类遵守 kernel 接口，与 in-tree 实现遵守同一份契约，写法见 [backend 如何接入](user-guide/dispatch/backends.md)。target 遵守的是 op 在 manifest 中的签名，backend 为它写一个 `build_kernel`。本页以下各节只讲 target。
+一个仓库之外的包通过 target 接管 op 的全部调用。target 遵守的是 op 在 manifest 中的签名，backend 为它写一个 `build_kernel`。TileOPs 各 op 的 kernel 接口与 call spec 不是公开 API，backend 不为单个 kernel 接口新增实现，见 [backend 如何接入](user-guide/dispatch/backends.md)。
 
 ## 写一个 backend 要做的四件事
 
@@ -99,10 +94,10 @@ def build_kernel(*inputs: "TensorSpec | None", **params) -> Callable[..., Kernel
 
 ```python
 # GroupNormFwdOp 的 spec：weight、bias 是可选输入，没传时实参是 None
-def build_group_norm(x, weight, bias, *, num_groups, eps):
+def build_group_norm(input, weight, bias, *, num_groups, eps):
     if weight is None:                                   # 由该位置的实参判断是否传入
-        return AcmeGroupNorm(num_groups, eps, x.dtype)
-    return AcmeGroupNormAffine(num_groups, eps, x.dtype)
+        return AcmeGroupNorm(num_groups, eps, input.dtype)
+    return AcmeGroupNormAffine(num_groups, eps, input.dtype)
 ```
 
 op 层调用 `build_kernel` 时，经 `torch.accelerator` 把调用设备设为当前设备；调用设备不是进程 accelerator 的类型时不切换。
@@ -151,7 +146,7 @@ def register_device_facts(device_type: str, read: Callable[[torch.device], Devic
 | 已注册的其他类型 | 注册的 `read`：收到调用的 `torch.device`，返回 `DeviceFacts` |
 | 未注册的类型，如 `cpu` | 没有设备事实：`-1 / None / 0 / 0` |
 
-- 需要注册的是用 `register_kernel_type` 加入、按架构、SM 数或共享内存选择的实现。声明了 `supported_archs` 的实现在未注册的设备类型上永远不可用。
+- 读取设备事实的是按架构、SM 数或共享内存选择的实现。声明了 `supported_archs` 的实现在未注册的设备类型上永远不可用。
 - 只服务整个 op 的 target 不需要注册：target 的 kernel 自己决定怎么选。
 - 按设备类型注册，与 target 无关：同一种设备上有多个 target 时，只由一个包注册。重复注册、注册 `cuda` 都报 `BackendError`。
 - `arch` 只在同一种设备类型内可比，所以声明 `supported_archs` 的实现，其 `devices` 只能有一种设备类型。
@@ -213,7 +208,7 @@ def build_gemm(a: TensorSpec, b: TensorSpec, *, trans_a, trans_b):
 
 ```python
 # ── 调用方 ───────────────────────────────────────────────────────────
-op = GemmFwdOp()                 # 构造时未给出 target=，由输入张量的设备决定
+op = GEMMFwdOp()                 # 构造时未给出 target=，由输入张量的设备决定
                                  #   给出 target="acme" 时跳过设备探测，直接使用它；
                                  #   给出 target=BUILTIN 时强制使用 in-tree kernel
 a = torch.randn(4096, 4096, dtype=torch.float16, device="acme:0")
@@ -229,7 +224,7 @@ d = op(a, b)                     # 所有输入必须在同一设备上：a.devi
 #   两个以上返回 True    → 抛出 AmbiguousTargetError，要求显式给出 target=
 
 # ── op 层：先执行由 manifest 签名生成的检查，再由 target 服务整个 op ──
-#   GemmFwdOp 自己的 forward 与 kernel_for 只服务 in-tree 实现，这次不执行
+#   GEMMFwdOp 自己的 forward 与 kernel_for 只服务 in-tree 实现，这次不执行
 #   传给 target 的张量按 signature.inputs 排列，不写入的输入先转为连续张量
 
 # ── op 层：按设备与输入签名查外部记忆表 ─────────────────────────────
@@ -258,7 +253,7 @@ def build_gemm(a: TensorSpec, b: TensorSpec, *, trans_a, trans_b):
     return AcmeGemm(a, b, trans_a, trans_b)
 
 
-register_kernel_builder(op="GemmFwdOp", target="acme", build_kernel=build_gemm)
+register_kernel_builder(op="GEMMFwdOp", target="acme", build_kernel=build_gemm)
 ```
 
 `build_gemm` 由 op 层调用，backend 自己不调用它。import backend 模块时只把它登记进注册表；一次调用由这个 target 服务且外部记忆表未命中时，op 层才调用它，每个「设备 + 输入签名」一次。它返回的可调用对象由 op 层 launch 并存入记忆表。
@@ -325,7 +320,7 @@ def build_rms_norm(x: TensorSpec, weight: TensorSpec | None, *, normalized_shape
 ```python
 BUILDERS = {
     "RMSNormFwdOp": build_rms_norm,
-    "GemmFwdOp": build_gemm,
+    "GEMMFwdOp": build_gemm,
 }
 ```
 
@@ -528,7 +523,7 @@ print(load_failures())
 | **`detect`** | backend 编写的一个函数，每个 target 一个 | 第一层的选择依据：接收一个 `torch.device`，回答这类设备是否是自己这套 kernel 的目标设备；不是则返回 `False` |
 | **`build_kernel`** | backend 为某个 op 编写的一个函数，每组 `(op, target)` 一个 | 第二层：接收本次调用的描述，即各输入张量的 device、dtype、shape 与 op 参数，从自己这套 kernel 中选定一个，构造好并返回 |
 
-**选择分两层：TileOPs 选 target，target 在自己那套 kernel 中选一个。** 第二层发生在 `build_kernel` 内部，协议不参与，这条路径上没有 kernel 一级的概念、能力协商与候选筛选。TileOPs 实际执行的候选筛选（可用性、适用范围、优先关系）属于 in-tree 实现与范围较小的 `register_kernel_type`（见[两种接入方式](#two-ways)），target 绕过这些筛选。
+**选择分两层：TileOPs 选 target，target 在自己那套 kernel 中选一个。** 第二层发生在 `build_kernel` 内部，协议不参与，这条路径上没有 kernel 一级的概念、能力协商与候选筛选。TileOPs 实际执行的候选筛选（可用性、适用范围、优先关系）只属于 in-tree 实现，target 绕过这些筛选。
 
 `detect` 只回答设备的归属，不回答更细的问题。**本次调用是否受支持（涉及 dtype、形状与参数组合）由 `build_kernel` 回答**，因为只有它看得到完整的输入描述与参数，不支持时也在那里报错。`detect` 只拿到一个 `torch.device`，无法作出这些判断。
 
@@ -613,7 +608,7 @@ backend 对一个 op 的结论是「通过了这台设备上实际运行的测�
 - 各测试的 `checked_outputs`；
 - 按测试文件统计的被去掉的测试数。被去掉的测试不进 JUnit，这个数由 backend 自行计算，即两次 `pytest tests/ops --collect-only -q` 的 node id 之差：一次用默认参数，一次加上 `--tileops-target` 与 `--tileops-device`。
 
-TileOPs 的 in-tree kernel（[`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels)）是**默认实现**：它没有 target 名，也不进入注册表。
+TileOPs 的 in-tree kernel（[`src/tileops/_kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_kernels)）是**默认实现**：它没有 target 名，也不进入注册表。
 
 **默认使用 in-tree 实现。** 没有安装 backend、没有通过 `target=` 指名、也没有设置进程默认值时，调用由 in-tree 实现服务。安装一个 backend 之后，只有当它的 `detect` 认领了这块设备，或者它被 `target=` 或 `set_default_target` 指名时，该 op 的 kernel 才换成这个 backend 的那一套。
 

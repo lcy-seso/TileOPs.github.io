@@ -69,16 +69,16 @@ A subclass may also override two methods:
 
 | No. | Method | Returns |
 | --- | --- | --- |
-| 1 | `iter_kernels()` | • Every `Kernel` in each interface's entries and in the held sub-ops, each once<br>• Kernels a target built are not walked; `built_entries(interface)` shows them |
-| 2 | `built_entries(interface)` | • In-tree path: the entries built for this kernel interface, told apart by `(implementation class, identity)`<br>• When a target serves the op: every target kernel of the op, told apart by device and each input's dtype and shape; `interface` does not filter |
-| 3 | `held_delegates()` | The sub-ops the composite op holds, in stage order |
+| 1 | `iter_kernels()` | • Every `Kernel` in each interface's entries and in the held sub-ops, each once<br>• Kernels a target built are not walked; `_entries_built(interface)` shows them |
+| 2 | `_entries_built(interface)` | • In-tree path: the entries built for this kernel interface, told apart by `(implementation class, identity)`<br>• When a target serves the op: every target kernel of the op, told apart by device and each input's dtype and shape; `interface` does not filter |
+| 3 | `_held_delegates()` | The sub-ops the composite op holds, in stage order |
 
 What the three methods are for:
 
-- `built_entries()` is for tests and benchmark reports only.
+- `_entries_built()` is for tests and benchmark reports only.
 - `request_tune()` and `kernel_config()` reach the in-tree kernels through `iter_kernels()`,
   and the kernels a target built by device.
-- `held_delegates()` also serves the recursive undo of sub-ops after a failure.
+- `_held_delegates()` also serves the recursive undo of sub-ops after a failure.
 
 The call path does not get kernels through these three methods:
 
@@ -111,7 +111,7 @@ reflection:
   kernel that does not define it makes the base class warn, once per instance. The rules
   are in [Adding a hardware backend § build_kernel](../../backends.md#build-kernel).
 - **Subclass overrides:** the above is the base class's behavior, and a subclass may override
-  it. `GemmW4A16FwdOp` does not support generic tuning: it overrides `request_tune()` to warn
+  it. `GEMMW4A16FwdOp` does not support generic tuning: it overrides `request_tune()` to warn
   and use its own calibrated selection.
 - **`kernel_config()`:** returns the op's own configuration; without one, the first non-empty
   `config` among the kernels `iter_kernels()` yields, then among the kernels a target built.

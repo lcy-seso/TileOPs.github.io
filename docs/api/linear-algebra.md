@@ -7,7 +7,7 @@ what runs when you call `op(...)`.
 
 ## Dense GEMM
 
-::: tileops.gemm.GemmFwdOp
+::: tileops.gemm.GEMMFwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -15,7 +15,7 @@ what runs when you call `op(...)`.
       merge_init_into_class: false
       show_signature_annotations: false
 
-::: tileops.gemm.GemmFP8FwdOp
+::: tileops.gemm.GEMMFP8FwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -23,7 +23,7 @@ what runs when you call `op(...)`.
       merge_init_into_class: false
       show_signature_annotations: false
 
-::: tileops.gemm.GemmW4A16FwdOp
+::: tileops.gemm.GEMMW4A16FwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -31,7 +31,7 @@ what runs when you call `op(...)`.
       merge_init_into_class: false
       show_signature_annotations: false
 
-::: tileops.gemm.GemmW4A8FwdOp
+::: tileops.gemm.GEMMW4A8FwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -39,7 +39,7 @@ what runs when you call `op(...)`.
       merge_init_into_class: false
       show_signature_annotations: false
 
-::: tileops.gemm.GemmINT8W8A8FwdOp
+::: tileops.gemm.GEMMINT8W8A8FwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -49,7 +49,7 @@ what runs when you call `op(...)`.
 
 ## Batched GEMM
 
-::: tileops.gemm.BmmFwdOp
+::: tileops.gemm.BMMFwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -57,7 +57,7 @@ what runs when you call `op(...)`.
       merge_init_into_class: false
       show_signature_annotations: false
 
-::: tileops.gemm.BmmFP8FwdOp
+::: tileops.gemm.BMMFP8FwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -67,7 +67,7 @@ what runs when you call `op(...)`.
 
 ## Grouped GEMM
 
-::: tileops.gemm.GroupedGemmFwdOp
+::: tileops.gemm.GroupedGEMMFwdOp
     options:
       show_root_heading: true
       heading_level: 3

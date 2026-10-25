@@ -13,8 +13,8 @@
 ```python
 class MoEExpertMLPFwdOp(Op):
     delegate_types: ClassVar[Mapping[str, type[Op]]] = {
-        "gate_up": MoEGroupedGemmFwdOp,
-        "down": MoEGroupedGemmFwdOp,
+        "gate_up": MoEGroupedGEMMFwdOp,
+        "down": MoEGroupedGEMMFwdOp,
     }
 
     def __init__(self, layout, activation="silu_and_mul", *, target=None):
@@ -26,7 +26,7 @@ class MoEExpertMLPFwdOp(Op):
         self.down = self.delegate_for("down", None, layout=layout)
 ```
 
-示例省略了类 docstring 和 `forward`，完整代码见 [`src/tileops/ops/moe/staged.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/ops/moe/staged.py)。子 op 遵循与 kernel 相同的规则：先在类上声明，再经基类的方法取得。
+示例省略了类 docstring 和 `forward`，完整代码见 [`src/tileops/_ops/moe/staged.py`](https://github.com/tile-ai/TileOPs/blob/main/src/tileops/_ops/moe/staged.py)。子 op 遵循与 kernel 相同的规则：先在类上声明，再经基类的方法取得。
 
 - **声明。** `delegate_types` 按 **stage** 名映射组合 op 可能持有的子 op 类；validator 检查它与 manifest 条目的 composition 一致。
     - 映射的顺序就是 stage 的顺序，与 manifest 的 composition 一致。
@@ -42,7 +42,7 @@ class MoEExpertMLPFwdOp(Op):
 - **一个实例只登记一次。**
     - 同一个 `(stage, identity)` 的重复调用，返回已持有的实例。
     - 把已经持有的实例用另一个 `(stage, identity)` 再次登记，`delegate_for` 报错。
-- **派生的枚举。** `held_delegates()`、`iter_kernels()` 和 `request_tune()` 从 `delegate_for` 持有的子 op 派生，组合 op 不覆盖它们。
+- **派生的枚举。** `_held_delegates()`、`iter_kernels()` 和 `request_tune()` 从 `delegate_for` 持有的子 op 派生，组合 op 不覆盖它们。
 
 ## 2. 子 op 的调用归入 stage {#stages}
 

@@ -4,10 +4,10 @@
 
 ## 1. 第一步：把实现登记到 op {#register}
 
-实现是同时继承 `Kernel`（或它的子类）与一个 kernel 接口的类。TileOPs 开发者把它加入 op 的 `kernel_types`，key 使用 snake_case；backend 作者调用 `register_kernel_type`，见 [backend 接入 2](backends.md#register)。
+实现是同时继承 `Kernel`（或它的子类）与一个 kernel 接口的类。TileOPs 开发者把它加入 op 的 `kernel_types`，key 使用 snake_case。
 
 ```python
-# src/tileops/ops/norm/batch_norm.py
+# src/tileops/_ops/norm/batch_norm.py
 class BatchNormFwdOp(Op):
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "fwd_train_whole": BatchNormFwdTrainWholeKernel,
@@ -51,7 +51,7 @@ class BatchNormFwdOp(Op):
 GQA dense decode 的三个实现是第 3 种情况。bs1 服务 batch 为 1 的调用，long-context 服务 KV 较长的调用，二者在 batch 为 1 且 KV 较长时重叠，由 long-context 声明它胜出：
 
 ```python
-# src/tileops/kernels/attention/gqa/decode.py
+# src/tileops/_kernels/attention/gqa/decode.py
 class GQADecodeLongContextKernel(GQADecodeKernel):
     general: bool = False
     preferred_over = frozenset({"gqa_dense_decode_bs1"})
@@ -100,7 +100,7 @@ class GQADecodeLongContextKernel(GQADecodeKernel):
 只有一个实现的接口因此只需继承接口。`LayerNormKernel` 只声明了支持的架构与自己的 `entry_for`：
 
 ```python
-# src/tileops/kernels/norm/layer_norm.py
+# src/tileops/_kernels/norm/layer_norm.py
 class LayerNormKernel(Kernel, LayerNormFwdInterface):
     supported_archs: list[int] = [80, 86, 89, 90]
 
@@ -123,10 +123,10 @@ class LayerNormKernel(Kernel, LayerNormFwdInterface):
 | 3 | 某个 shape 范围或某个架构上有更快的算法 | 新实现 |
 | 4 | 同一算法的 split 数为 1 或大于 1 | 实现内部的参数 |
 
-新接口需要一个 call spec 类型与一个接口类。family 下有多个 kernel 文件时，两者都写在 `src/tileops/kernels/<family>/call_spec.py`；只有一个 kernel 文件时，两者都写在这个 kernel 文件中。接口类按 `{Name}{Fwd|Bwd}Interface` 命名，表示变体的词写在方向后缀之前，例如 `BatchNormTrainFwdInterface`，由 pre-commit 的 `interface-names-lint` 检查。同一 family 的多个接口可以共用一个 call spec 类型，例如 BatchNorm 与 InstanceNorm 的六个接口都用 `BatchNormCall`。
+新接口需要一个 call spec 类型与一个接口类。family 下有多个 kernel 文件时，两者都写在 `src/tileops/_kernels/<family>/call_spec.py`；只有一个 kernel 文件时，两者都写在这个 kernel 文件中。接口类按 `{Name}{Fwd|Bwd}Interface` 命名，表示变体的词写在方向后缀之前，例如 `BatchNormTrainFwdInterface`，由 pre-commit 的 `interface-names-lint` 检查。同一 family 的多个接口可以共用一个 call spec 类型，例如 BatchNorm 与 InstanceNorm 的六个接口都用 `BatchNormCall`。
 
 ```python
-# src/tileops/kernels/norm/call_spec.py
+# src/tileops/_kernels/norm/call_spec.py
 @dataclasses.dataclass(frozen=True)
 class LayerNormCall(CallSpec):
     """The facts that select an implementation normalizing trailing rows and build it.
@@ -161,7 +161,7 @@ class LayerNormFwdInterface(KernelInterface):
 ```
 
 - call spec 的字段是各实现在 `refusal`、`entry_for` 中读取的调用事实：shape、dtype、语义参数（包括 op 构造时固定的参数）与 `device`。字段只能是不可变的值。不放张量内容、调优策略与优先级；设备事实由 `CallSpec` 提供。
-- 接口类的 `request` 指向 call spec 类型；抽象方法 `forward` 的参数表是 op 调用 kernel 时传入的参数，docstring 写明每个张量的 shape、dtype、内存布局、设备、是否被原地写入，以及返回值。backend 只依据这份契约编写实现。
+- 接口类的 `request` 指向 call spec 类型；抽象方法 `forward` 的参数表是 op 调用 kernel 时传入的参数，docstring 写明每个张量的 shape、dtype、内存布局、设备、是否被原地写入，以及返回值。实现只依据这份契约编写。
 - op 在 `forward` 之外还会在 entry 上调用的方法，一并写成接口的抽象方法。实现必须实现接口的全部抽象方法，否则这个类不能实例化。
 - 各实现必须一致的取值，写成接口的普通类方法，由接口算出。例如 op 要在选择之前按大小分配一个输出缓冲区时，这个大小由接口的类方法从 call spec 算出，而不是从已选中的实现上读。
 - docstring 写的必须是实现真正做到的：声明输入连续，op 就要在调用前调用 `.contiguous()`；实现不保证的行为（例如输入含 NaN 时的结果）写明未定义，不写成保证。
@@ -174,8 +174,8 @@ class LayerNormFwdInterface(KernelInterface):
 ```python
 # tests/ops/test_family_dispatch.py
 def test_gemm_k_too_narrow_to_vectorize_is_refused_during_selection() -> None:
-    op = GemmFwdOp()
-    call = GemmCall(arch=_SM90, sm_count=132, m=64, n=64, k=1, dtype=torch.float16, trans_b=True)
+    op = GEMMFwdOp()
+    call = GEMMCall(arch=_SM90, sm_count=132, m=64, n=64, k=1, dtype=torch.float16, trans_b=True)
 
     with pytest.raises(ValueError, match="k must span at least one"):
         op.key_for("gemm", call)

@@ -393,9 +393,8 @@ class Parametric:
                 src = os.path.join(self.tileops, "src")
                 if src not in sys.path:
                     sys.path.insert(0, src)
-                from tileops.manifest import workload
-                from tileops.manifest.plan import entry_plan
-                self._tools = (entry_plan, workload)
+                from tileops.manifest import entry_plan, instantiate
+                self._tools = (entry_plan, instantiate)
             except Exception as exc:  # noqa: BLE001 — degrade to ids alone
                 print(f"warning: parametric workloads keep their ids alone "
                       f"(tileops.manifest not importable: {exc})", file=sys.stderr)
@@ -406,7 +405,7 @@ class Parametric:
         tools = self._load()
         if not tools:
             return None
-        entry_plan, workload = tools
+        entry_plan, instantiate = tools
         try:
             if op not in self._plans:
                 self._plans[op] = entry_plan(op, entry, self.adts, resolve=False)
@@ -419,11 +418,11 @@ class Parametric:
                 continue
             for case in row.get("dtype_cases") or [{}]:
                 try:
-                    call = workload.instantiate(plan, row, case)
+                    call = instantiate(plan, row, case)
                 except Exception:  # noqa: BLE001 — a row this checkout rejects
                     continue
                 if call.case_id == config:
-                    return _parametric_spec(plan, row, case, call, workload)
+                    return _parametric_spec(plan, row, case, call)
         return None
 
 
@@ -438,13 +437,15 @@ def _fmt_param(value) -> str:
     return _fmt_value(value)
 
 
-def _symbolic_branch(plan, row, call, workload):
+def _symbolic_branch(plan, row, call):
     """Each present input's shape in the manifest's symbols, type families expanded.
 
     None when the branch cannot be rebuilt, so the row prints concrete shapes.
     """
     sig = plan.sig
     try:
+        # `tileops.manifest` exports no way to pick a row's branch.
+        from tileops.manifest import _workload as workload
         scope = {p: workload._convert(sig, p, row[p] if p in row
                                       else sig.params[p].get("default"))
                  for p in sig.params}
@@ -463,7 +464,7 @@ def _symbolic_branch(plan, row, call, workload):
     return out
 
 
-def _parametric_spec(plan, row, case, call, workload) -> Spec:
+def _parametric_spec(plan, row, case, call) -> Spec:
     sig = plan.sig
     present = [(n, call.specs[n]) for n in sig.inputs if call.specs.get(n) is not None]
     # The row's dtype is the first one its case id names, so a tensor in
@@ -479,7 +480,7 @@ def _parametric_spec(plan, row, case, call, workload) -> Spec:
     tensors = _group_tensors((n, fmt_shape(d), dt) for n, d, dt in shapes)
 
     symbolic, bindings = None, OrderedDict()
-    sym = _symbolic_branch(plan, row, call, workload)
+    sym = _symbolic_branch(plan, row, call)
     if sym is not None and len(sym) == len(present):
         for text in sym.values():
             for node in ast.walk(ast.parse(text, mode="eval")):

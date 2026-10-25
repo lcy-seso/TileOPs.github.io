@@ -1,9 +1,10 @@
 """mkdocs hooks: mirrored-content path rewrites, the Benchmarks nav, and the
 untranslated-page notice.
 
-* Mirrored design docs carry repo-relative paths (`../../tileops/...`) that do
-  not resolve here; `on_page_markdown` rewrites them after include-markdown has
-  pulled the content in.
+* Mirrored design docs carry repo-relative paths (`../../tileops/...`) and
+  links to other upstream docs (`../code-style.md`) that do not resolve here;
+  `on_page_markdown` rewrites them after include-markdown has pulled the content
+  in.
 * The Benchmarks pages are generated at deploy time and cannot be listed in
   `mkdocs.yml`; `on_config` expands that one nav entry to whatever the renderer
   produced.
@@ -32,6 +33,7 @@ import re
 UPSTREAM_BLOB = "https://github.com/tile-ai/TileOPs/blob/main"
 
 _DESIGN_REPO_PATH = re.compile(r"\.\./\.\./([\w./-]+)")
+_DESIGN_DOCS_PATH = re.compile(r"\]\(\.\./([\w./-]+)")
 
 # Keyed by the locale being built, not by the locale of the content shown.
 # A plain block, not an admonition: admonitions are styled as technical asides
@@ -65,6 +67,8 @@ def on_page_markdown(markdown, page, config, files):
         # Upstream design docs link to source files via ../../<repo path>.
         # Redirect those to GitHub so they resolve from the published site.
         markdown = _DESIGN_REPO_PATH.sub(rf"{UPSTREAM_BLOB}/\1", markdown)
+        # And to upstream docs outside docs/design via ../<doc>.
+        markdown = _DESIGN_DOCS_PATH.sub(rf"]({UPSTREAM_BLOB}/docs/\1", markdown)
 
     notice = _fallback_notice(page)
     if notice:
@@ -245,6 +249,7 @@ def on_page_content(html, page, config, files):
 # redirect is written into each locale's build.
 _REDIRECTS = {
     "api/topk/": "../sampling/#top-k-selection",
+    "design/architecture/": "../",
 }
 
 _REDIRECT_PAGE = (

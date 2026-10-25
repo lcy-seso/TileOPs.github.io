@@ -159,16 +159,9 @@ The signature check and dtypes:
 
 ## 4. Targets and the implementation table {#target}
 
-A backend joins TileOPs in one of two ways; how to use them is in
+A backend takes over a whole op through a target; how to use it is in
 [How a backend joins TileOPs](../dispatch/backends.md#choose). This section describes how the
-base class handles them.
-
-**Table 4** The two ways a backend joins
-
-| No. | Way | What it takes over | When the base class handles it |
-| --- | --- | --- | --- |
-| 1 | `target` | the whole op | selected in step 4 of a call, and unchanged after that |
-| 2 | `register_kernel_type` | adds one implementation to a kernel interface, which takes part in selection by its own declared applicability and precedence | merged into the implementation table by `Op.__init__` at construction |
+base class handles it: the target is selected in step 4 of a call, and unchanged after that.
 
 ### Selecting the target {#select-target}
 
@@ -262,7 +255,7 @@ This section distinguishes three words:
 One kernel type builds several entries, one per identity. Taking `RMSNormOnChipKernel` as the
 example:
 
-**Table 5** Kernel type and entry
+**Table 4** Kernel type and entry
 
 | No. | | Kernel type | Entry |
 | --- | --- | --- | --- |
@@ -273,7 +266,6 @@ example:
 | 5 | Kept in | `kernel_types`, `_installed_kernel_types` | `_built_entries` |
 | 6 | Used for | the base class selects this call's implementation from it | the subclass calls it: `entry(x, weight)` |
 
-`register_kernel_type` adds a kernel type to the candidates and builds no entry;
 `register_kernel_builder` registers a builder that builds the target's kernel directly,
 without selecting among kernel types; see [§ 4](#target).
 
@@ -337,7 +329,7 @@ If the target was selected in this call's step 4:
 After that, the binding group is back to having no target selected; the records of completed
 calls and the held sub-ops are kept. The next call selects the target again.
 
-**Table 6** Instance state after a failure
+**Table 5** Instance state after a failure
 
 | No. | Case | Target | Built kernels | `last_call` |
 | --- | --- | --- | --- | --- |

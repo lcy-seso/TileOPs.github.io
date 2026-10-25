@@ -178,7 +178,7 @@ The base class's members fall into three layers by who uses them:
 | 3 | `serving_target` | The target this instance selected | [Construction and calls § Targets and the implementation table](lifecycle.md#target) |
 | 4 | `last_call`, `eval_roofline()` | The last completed call, and its `(flops, bytes)` | [Call records and tuning § last_call](records.md#last-call) |
 | 5 | `request_tune()`, `kernel_config()` | Tuning, and reading the configuration in use | [Call records and tuning § Tuning](records.md#tune) |
-| 6 | `iter_kernels()`, `built_entries(interface)`, `held_delegates()` | Enumerate the built kernels, entries and sub-ops | [Call records and tuning § Enumeration](records.md#enumerate) |
+| 6 | `iter_kernels()`, `_entries_built(interface)`, `_held_delegates()` | Enumerate the built kernels, entries and sub-ops | [Call records and tuning § Enumeration](records.md#enumerate) |
 
 **Table 5** Internal interface: declared or called by op subclasses
 

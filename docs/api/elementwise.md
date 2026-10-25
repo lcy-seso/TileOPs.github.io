@@ -179,37 +179,37 @@ what runs when you call `op(...)`.
 
 ## Activations
 
-::: tileops.elementwise.ReluFwdOp
+::: tileops.elementwise.ReLUFwdOp
     options:
       show_root_heading: true
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.elementwise.LeakyReluFwdOp
+::: tileops.elementwise.LeakyReLUFwdOp
     options:
       show_root_heading: true
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.elementwise.EluFwdOp
+::: tileops.elementwise.ELUFwdOp
     options:
       show_root_heading: true
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.elementwise.SeluFwdOp
+::: tileops.elementwise.SELUFwdOp
     options:
       show_root_heading: true
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.elementwise.GeluFwdOp
+::: tileops.elementwise.GELUFwdOp
     options:
       show_root_heading: true
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.elementwise.SiluFwdOp
+::: tileops.elementwise.SiLUFwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -257,7 +257,7 @@ what runs when you call `op(...)`.
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.elementwise.PreluFwdOp
+::: tileops.elementwise.PReLUFwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -271,19 +271,19 @@ what runs when you call `op(...)`.
 
 ## Gated activations
 
-::: tileops.elementwise.SiluAndMulFwdOp
+::: tileops.elementwise.SiLUAndMulFwdOp
     options:
       show_root_heading: true
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.elementwise.GeluAndMulFwdOp
+::: tileops.elementwise.GELUAndMulFwdOp
     options:
       show_root_heading: true
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.elementwise.GeluTanhAndMulFwdOp
+::: tileops.elementwise.GELUTanhAndMulFwdOp
     options:
       show_root_heading: true
       heading_level: 3

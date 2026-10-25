@@ -218,7 +218,7 @@ def family_of(op: str, op_module: str | None,
         return fam
     mod = (op_module or "").lower()
     parts = mod.split(".")
-    if len(parts) >= 4 and parts[0] == "tileops" and parts[1] == "ops":
+    if len(parts) >= 4 and parts[0] == "tileops" and parts[1] in ("ops", "_ops"):
         if parts[2] in _MODULE_FAMILY:
             return _MODULE_FAMILY[parts[2]]
     hay = f"{mod} {op.lower()}"
@@ -364,7 +364,7 @@ def load_sol_engine(gpu: str, tileops: str = TILEOPS):
             os.path.join(tileops, "scripts", "nightly_report.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
-        from tileops.perf.profile import find_profile
+        from tileops._perf import find_profile
         profile = find_profile(gpu)
     except Exception as exc:  # noqa: BLE001 — degrade to an empty column
         print(f"warning: SOL column disabled ({exc})", file=sys.stderr)

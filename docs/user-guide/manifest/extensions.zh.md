@@ -76,14 +76,14 @@ adts:
   MGroupedLayout:
     sum:
       contiguous:
-        python: tileops.ops.moe.contracts.ContiguousLayoutSpec
+        python: tileops._ops.moe.contracts.ContiguousLayoutSpec
         fields:
-          packing: {type: "'tight' | 'aligned'", python: tileops.ops.moe.contracts.ContiguousPacking}
-          metadata_kind: {type: "'physical_psum' | 'per_row'", python: tileops.ops.moe.contracts.ContiguousMetadata}
+          packing: {type: "'tight' | 'aligned'", python: tileops._ops.moe.contracts.ContiguousPacking}
+          metadata_kind: {type: "'physical_psum' | 'per_row'", python: tileops._ops.moe.contracts.ContiguousMetadata}
           alignment: Dim
         invariant: "(packing == 'tight') == (alignment == 1) and alignment >= 1"
       masked:
-        python: tileops.ops.moe.contracts.MaskedLayoutSpec
+        python: tileops._ops.moe.contracts.MaskedLayoutSpec
         fields: {max_m: Dim}
 ```
 
@@ -138,7 +138,7 @@ primitive 是表达式中可以调用的内建函数，例如 `broadcast`、`red
 
 | No. | 声明 | 含义 | 例子 |
 | --- | --- | --- | --- |
-| 1 | 输出上的 `buffer: out` | `forward` 在所有输入之后增加参数 `out`。调用方传入 `out` 时，op 将结果写入并返回它；未传入时，op 分配新张量。`out` 与该输出的形状和 dtype 相同 | MoEGroupedGemm 的 `output` |
+| 1 | 输出上的 `buffer: out` | `forward` 在所有输入之后增加参数 `out`。调用方传入 `out` 时，op 将结果写入并返回它；未传入时，op 分配新张量。`out` 与该输出的形状和 dtype 相同 | MoEGroupedGEMM 的 `output` |
 | 2 | 输入上的 `mutated: true` | op 可能写入这个输入，它在调用前的内容参与计算 | |
 | 3 | 输入上的 `mutated: true` 与 `write_only: true` | 必须传入的结果缓冲：op 覆盖写入，结果只取决于其他输入；如果 op 返回 `None`，`outputs` 为空 | FusedMoEExperts 的 `output` |
 | 4 | 输入上的 `mutated: "<discriminant 表达式>"` | 仅当表达式为 true 时，op 才写入这个输入 | 激活函数的 `mutated: inplace` |
@@ -171,26 +171,26 @@ varlen、paged 等 op 使用 metadata 张量，例如 `cu_seqlens`、`block_tabl
 ```yaml
 forall: {B: Dim, S: Dim, H: Dim, D: Dim, NS: Dim, NC: Dim, T: "DType[...]", seq_lens: "Seq[Int]"}
 inputs:
-  offsets: {dtype: int32, optional: true, shape: "[NS + 1]",
-            values: "prefix_sum(seq_lens)", requires: ["prefix_offsets(S)"]}
-  indices: {dtype: int32, optional: "present(offsets)", shape: "[NC, 2]",
-            values: "chunk_indices(seq_lens, chunk_size)"}
+  cu_seqlens: {dtype: int32, optional: true, shape: "[NS + 1]",
+               values: "prefix_sum(seq_lens)", requires: ["prefix_offsets(S)"]}
+  chunk_indices: {dtype: int32, optional: "present(cu_seqlens)", shape: "[NC, 2]",
+                  values: "chunk_indices(seq_lens, chunk_size)"}
 ```
 
 generator 的规则如下：
 
 - generator 的实参由 workload 行给出，例如长度列表 `seq_lens`。`forall` 中 kind 为 `Seq[Int]` 的名字只能用作 generator 的实参。workload 行中的 `Seq[Int]` 可以写成整数列表，也可以写成返回列表的值 primitive 调用，例如 `seq_lens: "repeat(512, 64)"`。
-- 实例化时，generator 的结果与声明的形状做 unification，形状中的其他 index 由此求得，不需要在行中给出。上例中的 `NS` 与 `NC` 分别由 `offsets` 与 `indices` 的生成结果求得。实际调用时，这些 index 同样由输入张量求得。
+- 实例化时，generator 的结果与声明的形状做 unification，形状中的其他 index 由此求得，不需要在行中给出。上例中的 `NS` 与 `NC` 分别由 `cu_seqlens` 与 `chunk_indices` 的生成结果求得。实际调用时，这些 index 同样由输入张量求得。
 - generator 或者是确定性的，或者使用由 workload 种子派生的私有随机数，因此同一条行每次生成的取值都相同。
 - 每个 generator 结果的秩是固定的，或者由其形状参数决定。
 - 生成的张量声明整数 dtype（`int32` 或 `int64`）；参数超出定义域，或结果超出所声明 dtype 的范围时，generator 会报错。
-- generator 的实参可以是返回列表的 primitive，例如 GroupedGemm 的 `as_tensor(balanced_sizes(M, G))`。
+- generator 的实参可以是返回列表的 primitive，例如 GroupedGEMM 的 `as_tensor(balanced_sizes(M, G))`。
 
 `requires` 的规则如下：
 
 - `requires` 列出约束 metadata 张量内容的谓词。例如 `prefix_offsets(S)` 要求张量首项为 0、单调不减、末项为 `S`。被约束张量的内容是谓词隐含的第一个实参。
 - 每个谓词按固定的秩读取被约束的张量；逐元素给出上下界的谓词（如 `in_range`）可以作用于任意秩的张量。
-- 谓词的实参可以是另一个 metadata 张量，这样一条谓词就能约束两个张量之间的关系，例如 GroupedGemm 的 `batch_offsets` 声明 `requires: ["exclusive_prefix_of(batch_sizes)"]`，要求它是 `batch_sizes` 的 exclusive 前缀和。在被约束的张量存在的每个分支上，作为实参的那个张量也必须存在。
+- 谓词的实参可以是另一个 metadata 张量，这样一条谓词就能约束两个张量之间的关系，例如 GroupedGEMM 的 `batch_offsets` 声明 `requires: ["exclusive_prefix_of(batch_sizes)"]`，要求它是 `batch_sizes` 的 exclusive 前缀和。在被约束的张量存在的每个分支上，作为实参的那个张量也必须存在。
 - validator 在实例化时用生成的取值检查 `requires`。在实际调用中，这些约束由调用方保证，op 不检查张量的内容；因此 validator 还会检查，在被约束的张量存在的每个分支上，谓词都是良定义的。
 - 声明了 `requires` 的张量也必须声明 `values`。
 

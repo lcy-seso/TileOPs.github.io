@@ -4,10 +4,10 @@ This page describes the two steps of adding a kernel to an existing op, the defa
 
 ## 1. Step 1: register the implementation with the op {#register}
 
-An implementation is a class that subclasses both `Kernel` (or one of its subclasses) and a kernel interface. A TileOPs developer adds it to the op's `kernel_types` under a snake_case key. A backend author calls `register_kernel_type`; see [How a backend joins TileOPs § 2](backends.md#register).
+An implementation is a class that subclasses both `Kernel` (or one of its subclasses) and a kernel interface. A TileOPs developer adds it to the op's `kernel_types` under a snake_case key.
 
 ```python
-# src/tileops/ops/norm/batch_norm.py
+# src/tileops/_ops/norm/batch_norm.py
 class BatchNormFwdOp(Op):
     kernel_types: ClassVar[Mapping[str, type[Kernel]]] = {
         "fwd_train_whole": BatchNormFwdTrainWholeKernel,
@@ -51,7 +51,7 @@ When a new implementation's applicability overlaps an existing implementation, w
 The three GQA dense decode implementations are case 3. bs1 serves calls with batch 1, and long-context serves calls with a long KV. The two overlap when batch is 1 and KV is long, and long-context declares that it wins:
 
 ```python
-# src/tileops/kernels/attention/gqa/decode.py
+# src/tileops/_kernels/attention/gqa/decode.py
 class GQADecodeLongContextKernel(GQADecodeKernel):
     general: bool = False
     preferred_over = frozenset({"gqa_dense_decode_bs1"})
@@ -100,7 +100,7 @@ Two non-general implementations need a precedence declaration as soon as their a
 An interface with a single implementation therefore only needs the class to subclass the interface. `LayerNormKernel` declares only its supported architectures and its own `entry_for`:
 
 ```python
-# src/tileops/kernels/norm/layer_norm.py
+# src/tileops/_kernels/norm/layer_norm.py
 class LayerNormKernel(Kernel, LayerNormFwdInterface):
     supported_archs: list[int] = [80, 86, 89, 90]
 
@@ -123,10 +123,10 @@ A new kernel that changes the semantics or the call contract, for example by ret
 | 3 | a faster algorithm on some shape range or some architecture | a new implementation |
 | 4 | the same algorithm with a split count of 1 or greater than 1 | a parameter inside the implementation |
 
-A new interface needs a call spec type and an interface class. When the family has several kernel files, both are written in `src/tileops/kernels/<family>/call_spec.py`; when it has a single kernel file, both are written in that kernel file. Interface classes are named `{Name}{Fwd|Bwd}Interface`, with the word for the variant placed before the direction suffix, for example `BatchNormTrainFwdInterface`; the pre-commit hook `interface-names-lint` checks this. Several interfaces of one family can share a call spec type; for example, the six interfaces of BatchNorm and InstanceNorm all use `BatchNormCall`.
+A new interface needs a call spec type and an interface class. When the family has several kernel files, both are written in `src/tileops/_kernels/<family>/call_spec.py`; when it has a single kernel file, both are written in that kernel file. Interface classes are named `{Name}{Fwd|Bwd}Interface`, with the word for the variant placed before the direction suffix, for example `BatchNormTrainFwdInterface`; the pre-commit hook `interface-names-lint` checks this. Several interfaces of one family can share a call spec type; for example, the six interfaces of BatchNorm and InstanceNorm all use `BatchNormCall`.
 
 ```python
-# src/tileops/kernels/norm/call_spec.py
+# src/tileops/_kernels/norm/call_spec.py
 @dataclasses.dataclass(frozen=True)
 class LayerNormCall(CallSpec):
     """The facts that select an implementation normalizing trailing rows and build it.
@@ -161,7 +161,7 @@ class LayerNormFwdInterface(KernelInterface):
 ```
 
 - The call spec's fields are the call facts that implementations read in `refusal` and `entry_for`: shapes, dtypes, semantic parameters (including those fixed when the op is constructed), and `device`. Fields hold only immutable values. They do not hold tensor contents, tuning policy, or priorities; device facts are provided by `CallSpec`.
-- The interface class's `request` points to the call spec type. The parameter list of the abstract method `forward` is the arguments the op passes when it calls the kernel. Its docstring states, for each tensor, the shape, dtype, memory layout, device, and whether it is written in place, and it states the return value. A backend writes its implementation from this contract alone.
+- The interface class's `request` points to the call spec type. The parameter list of the abstract method `forward` is the arguments the op passes when it calls the kernel. Its docstring states, for each tensor, the shape, dtype, memory layout, device, and whether it is written in place, and it states the return value. An implementation is written from this contract alone.
 - Methods other than `forward` that the op calls on the entry are also written as abstract methods of the interface. An implementation must implement every abstract method of the interface; otherwise the class cannot be instantiated.
 - Values that every implementation must agree on are written as ordinary class methods of the interface and computed by the interface. For example, when the op allocates an output buffer by size before selection, a class method of the interface computes that size from the call spec; the size is not read from the selected implementation.
 - The docstring states only what the implementation actually does. If it declares the inputs contiguous, the op calls `.contiguous()` before the call. Behavior the implementation does not guarantee (for example, the result when an input contains NaN) is stated as undefined, not as a guarantee.
@@ -174,8 +174,8 @@ Write one test case for each applicability range and for each boundary between a
 ```python
 # tests/ops/test_family_dispatch.py
 def test_gemm_k_too_narrow_to_vectorize_is_refused_during_selection() -> None:
-    op = GemmFwdOp()
-    call = GemmCall(arch=_SM90, sm_count=132, m=64, n=64, k=1, dtype=torch.float16, trans_b=True)
+    op = GEMMFwdOp()
+    call = GEMMCall(arch=_SM90, sm_count=132, m=64, n=64, k=1, dtype=torch.float16, trans_b=True)
 
     with pytest.raises(ValueError, match="k must span at least one"):
         op.key_for("gemm", call)

@@ -6,7 +6,7 @@ wire the markers into a `@tilelang.jit` builder, run, and export a timeline.
 For a walkthrough, see the
 [In-Kernel Timeline Trace guide](../performance-guides/trace-timeline.md).
 
-::: tileops.trace.api._Trace
+::: tileops.trace._api._Trace
     options:
       show_root_heading: false
       show_root_toc_entry: false

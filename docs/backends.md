@@ -31,20 +31,13 @@ The second half explains why the protocol is designed this way:
 - the interfaces available to a caller;
 - what the protocol deliberately does not support.
 
-## Two ways to extend dispatch {#two-ways}
+## How a backend extends dispatch {#extend}
 
-A package outside TileOPs picks one of two mechanisms, by how much of an op it takes
-over:
-
-1. `register_kernel_type`: adds an implementation to a kernel interface, which takes
-   part in selection alongside the in-tree implementations;
-1. target: takes over every call of the op.
-
-In the first, the kernel class follows the kernel interface, the same contract the
-in-tree implementations follow; how to write one is in
-[How a backend joins TileOPs](user-guide/dispatch/backends.md). A target follows the op's
-manifest signature instead, and the backend writes a `build_kernel` for it. The rest of
-this page covers the target only.
+A package outside TileOPs takes over every call of an op through a target. A target
+follows the op's manifest signature, and the backend writes a `build_kernel` for it. The
+kernel interfaces and call specs of TileOPs' ops are not public API, so a backend does not
+add an implementation to a single kernel interface; see
+[How a backend joins TileOPs](user-guide/dispatch/backends.md).
 
 ## Four things to write
 
@@ -126,10 +119,10 @@ this call arrives as `None`.
 
 ```python
 # GroupNormFwdOp's spec: weight and bias are optional, and arrive as None when absent
-def build_group_norm(x, weight, bias, *, num_groups, eps):
+def build_group_norm(input, weight, bias, *, num_groups, eps):
     if weight is None:                                   # presence read off the slot
-        return AcmeGroupNorm(num_groups, eps, x.dtype)
-    return AcmeGroupNormAffine(num_groups, eps, x.dtype)
+        return AcmeGroupNorm(num_groups, eps, input.dtype)
+    return AcmeGroupNormAffine(num_groups, eps, input.dtype)
 ```
 
 The op layer calls `build_kernel` with the call's device made current through
@@ -187,8 +180,8 @@ call's device: `arch`, `calibration`, `sm_count` and `smem_budget`.
 | Another registered type | The registered `read`, which takes the call's `torch.device` and returns `DeviceFacts` |
 | An unregistered type, such as `cpu` | Nowhere: it reports `-1 / None / 0 / 0` |
 
-- A backend registers facts when it adds implementations with `register_kernel_type` that
-  are selected by architecture, SM count or shared memory. An implementation that declares
+- Facts are read by implementations that are selected by architecture, SM count or shared
+  memory. An implementation that declares
   `supported_archs` is never available on an unregistered device type.
 - A target that serves whole ops does not need them: its kernels make their own choices.
 - Facts belong to a device type, not to a target. If several targets serve one device
@@ -266,7 +259,7 @@ The steps of one call, from user code to a backend's `build_kernel`:
 
 ```python
 # ── the caller ───────────────────────────────────────────────────────
-op = GemmFwdOp()                 # no target= in the constructor, so the inputs' device decides
+op = GEMMFwdOp()                 # no target= in the constructor, so the inputs' device decides
                                  #   target="acme" skips detection and uses it directly;
                                  #   target=BUILTIN forces the in-tree kernels
 a = torch.randn(4096, 4096, dtype=torch.float16, device="acme:0")
@@ -282,7 +275,7 @@ d = op(a, b)                     # every input on one device: a.device == b.devi
 #   two or more True   → AmbiguousTargetError, asking for an explicit target=
 
 # ── op layer: run the checks generated from the manifest signature, then hand the whole op to the target ──
-#   GemmFwdOp's own forward and kernel_for serve the in-tree path only, and do not run
+#   GEMMFwdOp's own forward and kernel_for serve the in-tree path only, and do not run
 #   the tensors go to the target in signature.inputs order, inputs it does not write made contiguous
 
 # ── op layer: look up the external memo table — device, then input signature ──
@@ -311,7 +304,7 @@ def build_gemm(a: TensorSpec, b: TensorSpec, *, trans_a, trans_b):
     return AcmeGemm(a, b, trans_a, trans_b)
 
 
-register_kernel_builder(op="GemmFwdOp", target="acme", build_kernel=build_gemm)
+register_kernel_builder(op="GEMMFwdOp", target="acme", build_kernel=build_gemm)
 ```
 
 The op layer calls `build_gemm`; the backend never calls it itself. Importing the backend
@@ -409,7 +402,7 @@ every op the target takes over, with each key spelled as in the manifest. The pa
 ```python
 BUILDERS = {
     "RMSNormFwdOp": build_rms_norm,
-    "GemmFwdOp": build_gemm,
+    "GEMMFwdOp": build_gemm,
 }
 ```
 
@@ -658,8 +651,7 @@ print(load_failures())
 from its own set.** The second layer happens inside `build_kernel`, without the protocol:
 this path has no kernel-level concept, no capability negotiation and no candidate
 filtering. The candidate filtering TileOPs does run (availability, applicability,
-precedence) belongs to the in-tree path and to the smaller mechanism, `register_kernel_type` (see
-[Two ways to extend dispatch](#two-ways)); a target bypasses it.
+precedence) belongs to the in-tree path only; a target bypasses it.
 
 `detect` answers only which devices belong to the backend, and nothing finer.
 **Whether this call is supported (dtype, shape, parameter combination) is answered by
@@ -762,7 +754,7 @@ A claim comes with three sets of numbers:
   `pytest tests/ops --collect-only -q` runs: one with the default options, one with
   `--tileops-target` and `--tileops-device`.
 
-The in-tree kernels ([`src/tileops/kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/kernels))
+The in-tree kernels ([`src/tileops/_kernels/`](https://github.com/tile-ai/TileOPs/tree/main/src/tileops/_kernels))
 are the **default implementation**: they have no target name and are not in the registry.
 
 **The in-tree implementations run by default.** With no backend installed, no `target=`

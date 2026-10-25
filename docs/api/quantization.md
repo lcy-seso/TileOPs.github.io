@@ -19,7 +19,7 @@ what runs when you call `op(...)`.
       heading_level: 3
       members: ["__init__", "forward"]
 
-::: tileops.quantization.INT8QuantPerBlockFwdOp
+::: tileops.quantization.INT8QuantPerTokenGroupFwdOp
     options:
       show_root_heading: true
       heading_level: 3
@@ -33,7 +33,7 @@ what runs when you call `op(...)`.
 
 ## FP8 quantization
 
-::: tileops.quantization.FP8QuantFwdOp
+::: tileops.quantization.FP8QuantPerTokenGroupFwdOp
     options:
       show_root_heading: true
       heading_level: 3

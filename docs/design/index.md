@@ -6,8 +6,6 @@ repository — the source of truth — pulled in at site build time.
 
 ## System structure
 
-- [Architecture](architecture.md)
-  Top-level module layout and the spec-driven pipeline.
 - [Layer Boundaries](layer-boundaries.md)
   What each layer owns and depends on, and the interfaces layers compose through.
 
